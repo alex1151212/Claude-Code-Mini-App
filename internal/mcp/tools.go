@@ -21,23 +21,43 @@ type deps struct {
 	reg   *Registry
 }
 
+const (
+	defaultActivityLimit    = 200
+	maxActivityLimit        = 500
+	defaultActivityMaxChars = 500
+	maxMessagesLimit        = 500
+)
+
 // --- list_sessions ---
+
+type listSessionsIn struct {
+	Since string `json:"since,omitempty" jsonschema:"只列出 last_active >= 此時間的 session；ISO8601（建議帶時區，如 2026-09-09T00:00:00+08:00）"`
+}
 
 type listSessionsOut struct {
 	Sessions []*db.Session `json:"sessions"`
 }
 
-func (d *deps) listSessions(_ context.Context, _ *gomcp.CallToolRequest, _ struct{}) (*gomcp.CallToolResult, listSessionsOut, error) {
+func (d *deps) listSessions(_ context.Context, _ *gomcp.CallToolRequest, in listSessionsIn) (*gomcp.CallToolResult, listSessionsOut, error) {
+	since, err := parseQueryTime(in.Since)
+	if err != nil {
+		return nil, listSessionsOut{}, err
+	}
 	sessions, err := d.db.ListSessions()
 	if err != nil {
 		return nil, listSessionsOut{}, err
 	}
+	out := make([]*db.Session, 0, len(sessions))
 	for _, s := range sessions {
+		if since != "" && s.LastActive < since {
+			continue
+		}
 		if b, ok := gitinfo.Branch(s.WorkDir); ok {
 			s.GitBranch = b
 		}
+		out = append(out, s)
 	}
-	return nil, listSessionsOut{Sessions: sessions}, nil
+	return nil, listSessionsOut{Sessions: out}, nil
 }
 
 // --- create_session ---
@@ -87,16 +107,173 @@ func (d *deps) deleteSession(_ context.Context, _ *gomcp.CallToolRequest, in ses
 
 // --- get_messages ---
 
-type getMessagesOut struct {
-	Messages []*db.Message `json:"messages"`
+type getMessagesIn struct {
+	SessionID         string `json:"session_id"`
+	Since             string `json:"since,omitempty" jsonschema:"ISO8601（建議帶時區，如 2026-09-09T00:00:00+08:00）或 UTC SQLite 時間；只回此時間之後"`
+	Until             string `json:"until,omitempty" jsonschema:"只回此時間之前（含）"`
+	Limit             int    `json:"limit,omitempty" jsonschema:"最多則數，上限 500。未指定則整包（可能很大）；未帶 since 時取最新 N 則"`
+	AfterID           int64  `json:"after_id,omitempty" jsonschema:"只回 id 大於此值的訊息（分頁）"`
+	MaxChars          int    `json:"max_chars,omitempty" jsonschema:"單則 content 截斷字元數；0＝不截斷"`
+	IncludeResultText bool   `json:"include_result_text,omitempty" jsonschema:"是否回傳 result_text（常與 content 重複，預設否）"`
 }
 
-func (d *deps) getMessages(_ context.Context, _ *gomcp.CallToolRequest, in sessionIDIn) (*gomcp.CallToolResult, getMessagesOut, error) {
-	msgs, err := d.db.ListMessages(in.SessionID)
+type messageOut struct {
+	ID         int64  `json:"id"`
+	SessionID  string `json:"session_id"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+	ResultText string `json:"result_text,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+}
+
+type getMessagesOut struct {
+	Messages []messageOut `json:"messages"`
+}
+
+func (d *deps) getMessages(_ context.Context, _ *gomcp.CallToolRequest, in getMessagesIn) (*gomcp.CallToolResult, getMessagesOut, error) {
+	if strings.TrimSpace(in.SessionID) == "" {
+		return nil, getMessagesOut{}, fmt.Errorf("session_id 不可為空")
+	}
+	since, err := parseQueryTime(in.Since)
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
-	return nil, getMessagesOut{Messages: msgs}, nil
+	until, err := parseQueryTime(in.Until)
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	limit := in.Limit
+	if limit > maxMessagesLimit {
+		limit = maxMessagesLimit
+	}
+	msgs, err := d.db.ListMessagesQuery(db.MessageQuery{
+		SessionID:     in.SessionID,
+		Since:         since,
+		Until:         until,
+		AfterID:       in.AfterID,
+		Limit:         limit,
+		IncludeResult: in.IncludeResultText,
+	})
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	out := make([]messageOut, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, toMessageOut(m, in.MaxChars, in.IncludeResultText))
+	}
+	return nil, getMessagesOut{Messages: out}, nil
+}
+
+func toMessageOut(m *db.Message, maxChars int, includeResult bool) messageOut {
+	content, trunc := truncateRunes(m.Content, maxChars)
+	o := messageOut{
+		ID: m.ID, SessionID: m.SessionID, Role: m.Role, Content: content,
+		Status: m.Status, CreatedAt: m.CreatedAt, Truncated: trunc,
+	}
+	if includeResult {
+		rt, rtTrunc := truncateRunes(m.ResultText, maxChars)
+		o.ResultText = rt
+		if rtTrunc {
+			o.Truncated = true
+		}
+	}
+	return o
+}
+
+// --- list_activity ---
+
+type listActivityIn struct {
+	Since          string   `json:"since" jsonschema:"必填。ISO8601，建議帶時區，例如 2026-09-09T00:00:00+08:00"`
+	Until          string   `json:"until,omitempty" jsonschema:"結束時間（含）；省略＝不限制"`
+	Roles          []string `json:"roles,omitempty" jsonschema:"要包含的 role，預設只回 user。要全部則傳 [\"user\",\"claude\",\"shell\"]"`
+	WorkDir        string   `json:"work_dir,omitempty" jsonschema:"只看此工作目錄（斜線與大小寫會正規化）"`
+	ExcludeWorkDir []string `json:"exclude_work_dir,omitempty" jsonschema:"排除的工作目錄，例如 Eve 自己的路徑"`
+	MaxChars       int      `json:"max_chars,omitempty" jsonschema:"單則截斷字元數，預設 500"`
+	Limit          int      `json:"limit,omitempty" jsonschema:"最多訊息則數，預設 200、上限 500"`
+}
+
+type activityItem struct {
+	ID        int64  `json:"id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+type activityGroup struct {
+	SessionID string         `json:"session_id"`
+	Name      string         `json:"name"`
+	WorkDir   string         `json:"work_dir"`
+	AgentType string         `json:"agent_type"`
+	Count     int            `json:"count"`
+	Messages  []activityItem `json:"messages"`
+}
+
+type listActivityOut struct {
+	Sessions []activityGroup `json:"sessions"`
+}
+
+func (d *deps) listActivity(_ context.Context, _ *gomcp.CallToolRequest, in listActivityIn) (*gomcp.CallToolResult, listActivityOut, error) {
+	if strings.TrimSpace(in.Since) == "" {
+		return nil, listActivityOut{}, fmt.Errorf("since 必填，例如 2026-09-09T00:00:00+08:00")
+	}
+	since, err := parseQueryTime(in.Since)
+	if err != nil {
+		return nil, listActivityOut{}, err
+	}
+	until, err := parseQueryTime(in.Until)
+	if err != nil {
+		return nil, listActivityOut{}, err
+	}
+	roles := in.Roles
+	if len(roles) == 0 {
+		roles = []string{"user"}
+	}
+	exclude := make([]string, 0, len(in.ExcludeWorkDir))
+	for _, p := range in.ExcludeWorkDir {
+		if n := normPath(p); n != "" {
+			exclude = append(exclude, n)
+		}
+	}
+	maxChars := in.MaxChars
+	if maxChars <= 0 {
+		maxChars = defaultActivityMaxChars
+	}
+	rows, err := d.db.ListActivity(db.ActivityQuery{
+		Since:          since,
+		Until:          until,
+		Roles:          roles,
+		WorkDir:        normPath(in.WorkDir),
+		ExcludeWorkDir: exclude,
+		Limit:          clampLimit(in.Limit, defaultActivityLimit, maxActivityLimit),
+	})
+	if err != nil {
+		return nil, listActivityOut{}, err
+	}
+	return nil, listActivityOut{Sessions: groupActivity(rows, maxChars)}, nil
+}
+
+func groupActivity(rows []*db.ActivityRow, maxChars int) []activityGroup {
+	out := make([]activityGroup, 0)
+	idx := map[string]int{}
+	for _, r := range rows {
+		content, trunc := truncateRunes(r.Content, maxChars)
+		item := activityItem{ID: r.ID, Role: r.Role, Content: content, CreatedAt: r.CreatedAt, Truncated: trunc}
+		i, ok := idx[r.SessionID]
+		if !ok {
+			idx[r.SessionID] = len(out)
+			out = append(out, activityGroup{
+				SessionID: r.SessionID, Name: r.SessionName, WorkDir: r.WorkDir, AgentType: r.AgentType,
+				Count: 1, Messages: []activityItem{item},
+			})
+			continue
+		}
+		out[i].Messages = append(out[i].Messages, item)
+		out[i].Count++
+	}
+	return out
 }
 
 // --- send_message（非阻塞：立刻回，結果靠 get_status 輪詢） ---
@@ -261,7 +438,8 @@ func registerTools(s *gomcp.Server, d *deps) {
 	gomcp.AddTool(s, &gomcp.Tool{Name: "list_sessions", Description: "列出所有 session。互問／討論時用 id 當 send_message 的 session_id；自己的 id 見使用者 prompt 的 [miniapp] self，或上次諮詢信封的「你是 session_id」"}, d.listSessions)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "create_session", Description: "建立新 session"}, d.createSession)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "delete_session", Description: "刪除 session"}, d.deleteSession)
-	gomcp.AddTool(s, &gomcp.Tool{Name: "get_messages", Description: "讀取 session 歷史訊息"}, d.getMessages)
+	gomcp.AddTool(s, &gomcp.Tool{Name: "get_messages", Description: "讀取 session 歷史訊息；建議帶 since/until/limit，避免整包歷史"}, d.getMessages)
+	gomcp.AddTool(s, &gomcp.Tool{Name: "list_activity", Description: "依時間列出跨 session 活動（日報／秘書用）。since 建議帶時區。預設只回 user 訊息。操控 session 仍用 create_session / send_message"}, d.listActivity)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "send_message", Description: "非阻塞送出給目標 session。session 互問／討論時必填 from_session_id（你自己的 miniapp session_id），伺服器會蓋上自介與回覆署名；立刻回傳，用 get_status 輪詢結果"}, d.sendMessage)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "get_status", Description: "查詢 session 目前狀態與累積回覆內容"}, d.getStatus)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "respond_permission", Description: "回覆待授權的工具請求（allow_once/deny_once）"}, d.respondPermission)

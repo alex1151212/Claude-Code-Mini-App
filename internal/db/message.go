@@ -130,10 +130,54 @@ func (db *DB) ClearMessages(sessionID string) error {
 }
 
 func (db *DB) ListMessages(sessionID string) ([]*Message, error) {
-	rows, err := db.Query(
-		`SELECT id, session_id, role, content, status, created_at, COALESCE(result_text, '') FROM messages WHERE session_id = ? ORDER BY id ASC`,
-		sessionID,
-	)
+	return db.ListMessagesQuery(MessageQuery{SessionID: sessionID, IncludeResult: true})
+}
+
+// MessageQuery 為 MCP／內部查詢用的訊息篩選。時間字串須已轉成 UTC SQLite 格式（2006-01-02 15:04:05）。
+type MessageQuery struct {
+	SessionID     string
+	Since         string
+	Until         string
+	AfterID       int64
+	Limit         int
+	IncludeResult bool
+}
+
+func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
+	resultCol := `''`
+	if q.IncludeResult {
+		resultCol = `COALESCE(result_text, '')`
+	}
+	inner := `SELECT id, session_id, role, content, status, created_at, ` + resultCol + ` AS result_text FROM messages WHERE session_id = ?`
+	args := []any{q.SessionID}
+	if q.Since != "" {
+		inner += ` AND created_at >= ?`
+		args = append(args, q.Since)
+	}
+	if q.Until != "" {
+		inner += ` AND created_at <= ?`
+		args = append(args, q.Until)
+	}
+	if q.AfterID > 0 {
+		inner += ` AND id > ?`
+		args = append(args, q.AfterID)
+	}
+
+	// 只給 limit、沒有時間／after_id：取最新 N 則，再依時間正序回。
+	newestFirst := q.Limit > 0 && q.Since == "" && q.Until == "" && q.AfterID == 0
+	var query string
+	if newestFirst {
+		query = `SELECT * FROM (` + inner + ` ORDER BY id DESC LIMIT ?) ORDER BY id ASC`
+		args = append(args, q.Limit)
+	} else {
+		query = inner + ` ORDER BY id ASC`
+		if q.Limit > 0 {
+			query += ` LIMIT ?`
+			args = append(args, q.Limit)
+		}
+	}
+
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -151,4 +195,91 @@ func (db *DB) ListMessages(sessionID string) ([]*Message, error) {
 		msgs = append(msgs, &m)
 	}
 	return msgs, rows.Err()
+}
+
+// ActivityRow 是跨 session 活動查詢的一則訊息，帶 session 元資料。
+type ActivityRow struct {
+	Message
+	SessionName string
+	WorkDir     string
+	AgentType   string
+}
+
+// ActivityQuery 時間字串須已轉成 UTC SQLite 格式；ExcludeWorkDir／WorkDir 須已正規化（小寫、/、無尾斜線）。
+type ActivityQuery struct {
+	Since          string
+	Until          string
+	Roles          []string
+	WorkDir        string
+	ExcludeWorkDir []string
+	Limit          int
+}
+
+const sqlNormWorkDir = `rtrim(lower(replace(s.work_dir, char(92), '/')), '/')`
+
+func (db *DB) ListActivity(q ActivityQuery) ([]*ActivityRow, error) {
+	sql := `SELECT m.id, m.session_id, m.role, m.content, m.status, m.created_at,
+		s.name, s.work_dir, s.agent_type
+		FROM messages m JOIN sessions s ON s.id = m.session_id WHERE 1=1`
+	var args []any
+	if q.Since != "" {
+		sql += ` AND m.created_at >= ?`
+		args = append(args, q.Since)
+	}
+	if q.Until != "" {
+		sql += ` AND m.created_at <= ?`
+		args = append(args, q.Until)
+	}
+	if len(q.Roles) > 0 {
+		sql += ` AND m.role IN (` + placeholders(len(q.Roles)) + `)`
+		for _, r := range q.Roles {
+			args = append(args, r)
+		}
+	}
+	if q.WorkDir != "" {
+		sql += ` AND ` + sqlNormWorkDir + ` = ?`
+		args = append(args, q.WorkDir)
+	}
+	if len(q.ExcludeWorkDir) > 0 {
+		sql += ` AND ` + sqlNormWorkDir + ` NOT IN (` + placeholders(len(q.ExcludeWorkDir)) + `)`
+		for _, p := range q.ExcludeWorkDir {
+			args = append(args, p)
+		}
+	}
+	sql += ` ORDER BY m.created_at ASC, m.id ASC`
+	if q.Limit > 0 {
+		sql += ` LIMIT ?`
+		args = append(args, q.Limit)
+	}
+
+	rows, err := db.Query(sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*ActivityRow
+	for rows.Next() {
+		var r ActivityRow
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Role, &r.Content, &r.Status, &r.CreatedAt,
+			&r.SessionName, &r.WorkDir, &r.AgentType); err != nil {
+			return nil, err
+		}
+		if r.Status == "" {
+			r.Status = MessageStatusDone
+		}
+		out = append(out, &r)
+	}
+	return out, rows.Err()
+}
+
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	s := "?"
+	for i := 1; i < n; i++ {
+		s += ",?"
+	}
+	return s
 }

@@ -122,7 +122,7 @@ function GeneralSection() {
             <div className="text-[11px] text-[oklch(0.55_0.01_264)] mt-0.5">
               當伺服器程式本身以系統管理員身分執行時，直接開啟 VSCode 會因權限不一致出現
               「Another instance of Code is already running as administrator」錯誤。開啟此選項後，
-              伺服器改用 <code className="ra-mono">runas /trustlevel</code> 以一般使用者權限啟動 VSCode（僅 Windows 有效）。
+              伺服器改透過 <code className="ra-mono">explorer.exe</code> 分派 <code className="ra-mono">vscode://</code> 連結以一般使用者權限啟動 VSCode（僅 Windows 有效）。
             </div>
           </div>
         </label>

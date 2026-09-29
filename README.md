@@ -29,7 +29,7 @@ cp config.example.yaml config.yaml   # set bot_token, whitelist_tg_ids
 - **Permissions** — Claude denial flow; Kiro ACP mid-turn approval; approve once or switch mode from the UI
 - **Auth** — Telegram `initData` + allowlist; optional web login on private IPs
 - **Optional shell** — Run commands in `work_dir` (off by default); when on, also shows "Open in VS Code" / "Open folder" buttons in the session header (desktop only)
-- **MCP server** — Expose sessions to other agents over Streamable HTTP (`POST /mcp`, off by default)
+- **MCP server** — Expose sessions to other agents over Streamable HTTP (`POST /mcp`, off by default): operate sessions, read chat history, and query cross-session activity
 
 ## Why this?
 

@@ -29,7 +29,7 @@ cp config.example.yaml config.yaml   # 填 bot_token、whitelist_tg_ids
 - **權限流程** — Claude 遭拒時可「允許一次」或切換模式；Kiro ACP 支援回合中途授權
 - **驗證** — Telegram `initData` + 白名單；可選內網密碼登入
 - **選用 Shell** — 於 `work_dir` 執行指令（預設關閉）；開啟後會在會話 header 顯示「開啟 VSCode／開啟目錄」按鈕（僅桌面版）
-- **MCP server** — 透過 Streamable HTTP（`POST /mcp`）讓其他 agent 操作 session（預設關閉）
+- **MCP server** — 透過 Streamable HTTP（`POST /mcp`）讓其他 agent 操作 session、讀聊天紀錄、查跨 session 活動（預設關閉）
 
 ## 為什麼用這個？
 
