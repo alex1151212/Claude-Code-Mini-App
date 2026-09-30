@@ -139,6 +139,9 @@ func main() {
 
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: false,
+		// 預設 4MB；上傳單檔上限 8MB（media.MaxUploadBytes）+ multipart 開銷。
+		// ponytail: 全域放寬，只有上傳需要；若要收緊，改成只對 /sessions/:id/uploads 放寬。
+		BodyLimit: 10 * 1024 * 1024,
 	})
 
 	// 靜態 HTML（不需驗證）
@@ -318,6 +321,9 @@ func main() {
 	app.Post("/sessions/:id/open-vscode", authMiddleware, oh.OpenVSCode)
 	app.Post("/sessions/:id/open-folder", authMiddleware, oh.OpenFolder)
 
+	uh := api.NewUploadHandler(database)
+	app.Post("/sessions/:id/uploads", authMiddleware, uh.Upload)
+
 	quotaSvc := quota.NewService()
 	go quotaSvc.Warmup(context.Background())
 	qh := api.NewQuotaHandler(quotaSvc)
@@ -350,7 +356,7 @@ func main() {
 
 	// MCP：讓其他 agent 透過 Streamable HTTP 操作本服務（需設定 mcp_token 才會啟用）
 	if cfg.McpToken != "" {
-		mcpHandler := mymcp.NewHTTPHandler(database, quotaSvc, cfg.Server.Port, cfg.McpToken)
+		mcpHandler := mymcp.NewHTTPHandler(database, quotaSvc, cfg.Server.Port, cfg.McpToken, cfg.McpMaxHops)
 		app.Post("/mcp", authMiddleware, adaptor.HTTPHandler(mcpHandler))
 	} else {
 		slog.Info("[mcp] mcp_token 未設定，/mcp 停用")

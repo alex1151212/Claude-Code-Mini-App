@@ -29,6 +29,10 @@ no_auth: false
 # 用法：Authorization: Bearer <mcp_token>
 # mcp_token: "change-me-too"
 
+# session 互問（帶 from_session_id 的 send_message / ask_session）的跳數上限，
+# 擋住 A↔B 互相轉問無限燒額度；使用者直接輸入會把計數歸零。預設 5。
+# mcp_max_hops: 5
+
 # 任務結束時的 Telegram 推播（錯誤／中斷）
 notify:
   on_error: true

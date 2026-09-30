@@ -32,7 +32,12 @@ func (h *OpenHandler) resolveWorkDir(sessionID string) (string, int, string) {
 	if !h.enabled {
 		return "", 403, "shell.enabled 未開啟，無法使用此功能"
 	}
-	sess, err := h.db.GetSession(sessionID)
+	return sessionWorkDir(h.db, sessionID)
+}
+
+// sessionWorkDir 取得 session 的 work_dir 絕對路徑並確認目錄存在；失敗時 status != 0。
+func sessionWorkDir(database *db.DB, sessionID string) (string, int, string) {
+	sess, err := database.GetSession(sessionID)
 	if err != nil {
 		return "", 404, "session 不存在"
 	}

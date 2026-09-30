@@ -17,6 +17,8 @@ type Config struct {
 	Notify         Notify  `mapstructure:"notify"`
 	// McpToken 供 MCP client（其他 agent）認證 /mcp endpoint 的固定 service token；空字串表示停用 /mcp。
 	McpToken string `mapstructure:"mcp_token"`
+	// McpMaxHops 為 session 互問（send_message / ask_session 帶 from_session_id）的跳數上限，預設 5。
+	McpMaxHops int `mapstructure:"mcp_max_hops"`
 }
 
 // Notify 任務結束時的 Telegram 推播設定。
@@ -77,6 +79,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("notify.error_preview_len", 800)
 	viper.SetDefault("notify.include_prompt", true)
 	viper.SetDefault("notify.prompt_preview_len", 120)
+	viper.SetDefault("mcp_max_hops", 5)
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("讀取 config.yaml 失敗: %w", err)

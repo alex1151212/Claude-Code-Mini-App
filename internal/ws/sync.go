@@ -2,6 +2,8 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jerry12122/Claude-Code-Mini-App/internal/db"
@@ -109,4 +111,15 @@ func idleUIStatus(database *db.DB, sessionID string) string {
 		return StateShellIdle
 	}
 	return StateIdle
+}
+
+// loadQueueState 讀出佇列與暫停旗標；讀取失敗只記 log，回空佇列讓 UI 照常運作。
+func loadQueueState(database *db.DB, sessionID string) ([]db.QueuedMessage, bool) {
+	q, err := database.ListQueuedMessages(sessionID)
+	if err != nil {
+		slog.Info(fmt.Sprintf("[ws] ListQueuedMessages: %v", err))
+		return nil, false
+	}
+	paused, _ := database.QueuePaused(sessionID)
+	return q, paused
 }

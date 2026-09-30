@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -16,9 +17,10 @@ import (
 )
 
 type deps struct {
-	db    *db.DB
-	quota *quota.Service
-	reg   *Registry
+	db      *db.DB
+	quota   *quota.Service
+	reg     *Registry
+	maxHops int
 }
 
 const (
@@ -289,26 +291,92 @@ type startedOut struct {
 }
 
 func (d *deps) sendMessage(_ context.Context, _ *gomcp.CallToolRequest, in sendMessageIn) (*gomcp.CallToolResult, startedOut, error) {
-	text := strings.TrimSpace(in.Text)
-	if text == "" {
-		return nil, startedOut{}, fmt.Errorf("text 不可為空")
-	}
-	fromID := strings.TrimSpace(in.FromSessionID)
-	if fromID != "" {
-		from, err := d.db.GetSession(fromID)
-		if err != nil {
-			return nil, startedOut{}, fmt.Errorf("from_session_id 不存在")
-		}
-		to, err := d.db.GetSession(in.SessionID)
-		if err != nil {
-			return nil, startedOut{}, fmt.Errorf("session_id 不存在")
-		}
-		text = wrapConsultEnvelope(from, to, text)
+	text, err := d.prepareConsult(in.SessionID, in.FromSessionID, in.Text, consultAsync)
+	if err != nil {
+		return nil, startedOut{}, err
 	}
 	if err := d.reg.SendMessage(in.SessionID, text); err != nil {
 		return nil, startedOut{}, err
 	}
 	return nil, startedOut{Status: "started"}, nil
+}
+
+// prepareConsult 驗證輸入；有 from_session_id 時蓋上 envelope 並檢查 hop 上限。
+func (d *deps) prepareConsult(toID, fromID, rawText string, mode consultMode) (string, error) {
+	text := strings.TrimSpace(rawText)
+	if text == "" {
+		return "", fmt.Errorf("text 不可為空")
+	}
+	fromID = strings.TrimSpace(fromID)
+	if fromID == "" {
+		return text, nil
+	}
+	if fromID == strings.TrimSpace(toID) {
+		return "", fmt.Errorf("from_session_id 不可等於 session_id（不能問自己）")
+	}
+	from, err := d.db.GetSession(fromID)
+	if err != nil {
+		return "", fmt.Errorf("from_session_id 不存在")
+	}
+	to, err := d.db.GetSession(toID)
+	if err != nil {
+		return "", fmt.Errorf("session_id 不存在")
+	}
+	latest, err := d.db.LatestUserMessage(fromID)
+	if err != nil {
+		return "", err
+	}
+	hop := nextHop(latest)
+	if err := checkHop(hop, d.maxHops); err != nil {
+		return "", err
+	}
+	return wrapConsultEnvelope(from, to, text, hop, mode), nil
+}
+
+// --- ask_session（阻塞：送出後等對方這一輪結束才回） ---
+
+const (
+	defaultAskTimeoutSec = 600
+	maxAskTimeoutSec     = 1800
+)
+
+type askSessionIn struct {
+	SessionID     string `json:"session_id"`
+	Text          string `json:"text"`
+	FromSessionID string `json:"from_session_id,omitempty" jsonschema:"你自己的 miniapp session_id；session 互問時必填，伺服器會蓋上自介並計算 hop"`
+	TimeoutSec    int    `json:"timeout_sec,omitempty" jsonschema:"最多等幾秒，預設 600、上限 1800；逾時回傳目前的部分回覆，可再用 get_status 追"`
+}
+
+type askSessionOut struct {
+	State             string          `json:"state" jsonschema:"本輪結果狀態：idle 已回答完；awaiting_permission 或 shell_pending 對方卡在授權；running 逾時仍在跑"`
+	Text              string          `json:"text,omitempty"`
+	PendingPermission json.RawMessage `json:"pending_permission,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	TimedOut          bool            `json:"timed_out,omitempty"`
+}
+
+func (d *deps) askSession(ctx context.Context, _ *gomcp.CallToolRequest, in askSessionIn) (*gomcp.CallToolResult, askSessionOut, error) {
+	target, err := d.db.GetSession(in.SessionID)
+	if err != nil {
+		return nil, askSessionOut{}, fmt.Errorf("session_id 不存在")
+	}
+	// ponytail: 忙碌就拒絕而不排隊——排隊後等到的「結束」可能是前一輪，要正確就得依 msgID 追蹤。
+	if target.Status != db.SessionStatusIdle {
+		return nil, askSessionOut{}, fmt.Errorf("目標 session 忙碌中（%s），請稍後再問，或改用 send_message（會排入佇列）", target.Status)
+	}
+	text, err := d.prepareConsult(in.SessionID, in.FromSessionID, in.Text, consultAsk)
+	if err != nil {
+		return nil, askSessionOut{}, err
+	}
+	sec := clampLimit(in.TimeoutSec, defaultAskTimeoutSec, maxAskTimeoutSec)
+	res, err := d.reg.Ask(ctx, in.SessionID, text, time.Duration(sec)*time.Second)
+	if err != nil {
+		return nil, askSessionOut{}, err
+	}
+	return nil, askSessionOut{
+		State: res.State, Text: res.Text, PendingPermission: res.PendingPermission,
+		Error: res.Error, TimedOut: res.TimedOut,
+	}, nil
 }
 
 // --- get_status ---
@@ -440,7 +508,8 @@ func registerTools(s *gomcp.Server, d *deps) {
 	gomcp.AddTool(s, &gomcp.Tool{Name: "delete_session", Description: "刪除 session"}, d.deleteSession)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "get_messages", Description: "讀取 session 歷史訊息；建議帶 since/until/limit，避免整包歷史"}, d.getMessages)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "list_activity", Description: "依時間列出跨 session 活動（日報／秘書用）。since 建議帶時區。預設只回 user 訊息。操控 session 仍用 create_session / send_message"}, d.listActivity)
-	gomcp.AddTool(s, &gomcp.Tool{Name: "send_message", Description: "非阻塞送出給目標 session。session 互問／討論時必填 from_session_id（你自己的 miniapp session_id），伺服器會蓋上自介與回覆署名；立刻回傳，用 get_status 輪詢結果"}, d.sendMessage)
+	gomcp.AddTool(s, &gomcp.Tool{Name: "send_message", Description: "非阻塞送出給目標 session（對方忙碌時排入佇列）。session 互問／討論時必填 from_session_id（你自己的 miniapp session_id），伺服器會蓋上自介與回覆署名；立刻回傳，用 get_status 輪詢結果。要直接拿回答請用 ask_session"}, d.sendMessage)
+	gomcp.AddTool(s, &gomcp.Tool{Name: "ask_session", Description: "阻塞式詢問：送出後等目標 session 這一輪回答完才回傳（含回答全文）。目標須閒置；互問時帶 from_session_id。可設 timeout_sec，逾時回部分回覆。等待期間若同一 session 被其他操作（send_message、set_model 等）介入，會回傳 error 說明結果可能不完整"}, d.askSession)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "get_status", Description: "查詢 session 目前狀態與累積回覆內容"}, d.getStatus)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "respond_permission", Description: "回覆待授權的工具請求（allow_once/deny_once）"}, d.respondPermission)
 	gomcp.AddTool(s, &gomcp.Tool{Name: "set_permission_mode", Description: "切換 session 的權限模式"}, d.setPermissionMode)

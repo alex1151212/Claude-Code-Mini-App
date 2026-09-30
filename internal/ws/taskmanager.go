@@ -23,6 +23,17 @@ func init() {
 	taskManager.tasks = make(map[string]*taskEntry)
 }
 
+// dispatchLocks 序列化「判斷忙碌→排隊或啟動」與「佇列取出→啟動」。
+// runAgent 在 taskCancel 與 taskStart 之間有 DB I/O 空窗；不加鎖時新 input 可能在空窗判定成閒置而插隊。
+// 以 session 為 key（同一 session 可能有多條 WS 連線，各自持有 closure）。
+// ponytail: 刪除 session 後 mutex 不回收；每個 session 一個，量小可忽略，真的累積再於 DeleteSession 時清掉。
+var dispatchLocks sync.Map // sessionID → *sync.Mutex
+
+func dispatchLock(sessionID string) *sync.Mutex {
+	m, _ := dispatchLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
+
 func taskStart(sessionID string, cancel context.CancelFunc, msgID int64) {
 	taskManager.mu.Lock()
 	if old, ok := taskManager.tasks[sessionID]; ok && old.cancel != nil {

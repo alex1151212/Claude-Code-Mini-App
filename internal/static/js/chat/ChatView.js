@@ -19,6 +19,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     quota, quotaRefreshing,
     sessionModel,
     activityHint,
+    queue, queuePaused,
     send,
     flushPendingModes,
     handleQuotaRefresh,
@@ -133,12 +134,14 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     focusChatInput();
   }, [histLoaded, session.id, focusChatInput]);
 
-  // 狀態切回可輸入時（例如 THINKING／STREAMING 結束）自動 focus
+  // 狀態切回可輸入時（例如 THINKING／STREAMING 結束）自動 focus。
+  // 只在閒置狀態 focus：執行中輸入框也可用（排隊），若每次狀態變化都 focus，手機鍵盤會反覆彈出。
   useEffect(() => {
     const prev = prevChatStateRef.current;
     prevChatStateRef.current = state;
     if (prev === null) return;
     if (prev === state) return;
+    if (state !== 'IDLE' && state !== 'SHELL_IDLE') return;
     focusChatInput();
   }, [state, focusChatInput]);
 
@@ -257,8 +260,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       closeComposerMenus();
       return;
     }
-    if (state !== 'IDLE' && state !== 'SHELL_IDLE') return;
-    if (!flushPendingModes()) return;
+    const idle = state === 'IDLE' || state === 'SHELL_IDLE';
+    if (!idle && !canQueue) return;
+    // 排隊時不 flush 模式：set_mode 等會廣播 idle 狀態，執行中送會讓 UI 誤判完成。
+    if (idle && !flushPendingModes()) return;
     const expanded = expandMentionPrompt(trimmed, session, mentionChips);
     if (!send({ type: 'input', data: expanded })) return;
     clearDraftInputForSession(session.id);
@@ -355,6 +360,41 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
 
   const handleInterrupt = () => send({ type: 'interrupt' });
 
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  // 📎 上傳：存進 work_dir 後把絕對路徑插到輸入框開頭，agent 以路徑讀檔（各家 CLI 通用）。
+  const handleFilesPicked = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!files.length) return;
+    setUploading(true);
+    const lines = [];
+    try {
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append('file', f);
+        const res = await apiFetch(`/sessions/${session.id}/uploads`, { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          window.alert(`${f.name}：${data.error || '上傳失敗'}`);
+          continue;
+        }
+        lines.push(`[附件] ${data.path}`);
+      }
+    } catch (_) {
+      window.alert('上傳失敗');
+    } finally {
+      setUploading(false);
+    }
+    if (!lines.length) return;
+    setInput((prev) => {
+      const next = lines.join('\n') + '\n' + prev;
+      try { localStorage.setItem(draftInputStorageKey(session.id), next); } catch (_) {}
+      return next;
+    });
+    focusChatInput();
+  };
+
   const handleInputModeChange = (newMode) => {
     const busy = ['THINKING', 'STREAMING', 'AWAITING_CONFIRM', 'SHELL_RUNNING', 'SHELL_AWAITING_APPROVAL', 'SHELL_EXEC', 'AWAITING_SHELL_CONFIRM'].includes(state);
     if (busy) return;
@@ -376,7 +416,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     setShellPendingCmd(null);
   };
 
-  const isDisabled = state === 'THINKING' || state === 'STREAMING' || state === 'AWAITING_CONFIRM' || state === 'SHELL_RUNNING' || state === 'SHELL_AWAITING_APPROVAL' || state === 'SHELL_EXEC' || state === 'AWAITING_SHELL_CONFIRM';
+  const agentRunning = state === 'THINKING' || state === 'STREAMING';
+  const taskRunning = agentRunning || state === 'SHELL_RUNNING' || state === 'SHELL_EXEC';
+  // Agent 執行中／等授權時仍可送出：後端排入佇列，前一輪成功後依序執行。
+  const canQueue = inputMode !== 'shell' && (agentRunning || state === 'AWAITING_CONFIRM');
+  const isDisabled = !canQueue && (state === 'THINKING' || state === 'STREAMING' || state === 'AWAITING_CONFIRM' || state === 'SHELL_RUNNING' || state === 'SHELL_AWAITING_APPROVAL' || state === 'SHELL_EXEC' || state === 'AWAITING_SHELL_CONFIRM');
   const modeSwitchDisabled = ['THINKING', 'STREAMING', 'AWAITING_CONFIRM', 'SHELL_RUNNING', 'SHELL_AWAITING_APPROVAL', 'SHELL_EXEC', 'AWAITING_SHELL_CONFIRM'].includes(state);
   const slashMenuOpen = slashMenuItems.length > 0;
   const composerMenuOpen = slashMenuOpen || mentionOpen;
@@ -647,13 +691,20 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         className={`shrink-0 px-4 sm:px-7 py-4 border-t transition-colors duration-200 ${inputMode === 'shell' ? 'bg-[oklch(0.15_0.02_264)] border-amber-900/40' : 'bg-[oklch(0.15_0.02_264)] border-[oklch(0.26_0.02_264)]'}`}
         style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
       >
-        {(state === 'STREAMING' || state === 'THINKING' || state === 'SHELL_RUNNING' || state === 'SHELL_EXEC') ? (
+        {taskRunning && !canQueue ? (
           <button onClick={handleInterrupt}
             className="w-full py-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-sm">
             中斷
           </button>
         ) : (
           <div className="w-full relative" ref={composerWrapRef}>
+            <QueuedMessages
+              items={queue}
+              paused={queuePaused}
+              canResume={queue.length > 0 && (queuePaused || state === 'IDLE' || state === 'SHELL_IDLE')}
+              onRemove={(id) => send({ type: 'queue_remove', id })}
+              onResume={() => send({ type: 'queue_resume' })}
+            />
             {inputMode !== 'shell' && (
               <MentionChips items={mentionChips} onRemove={handleMentionChipRemove} />
             )}
@@ -672,6 +723,25 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 showLabel
                 agentLabel={AGENT_LABEL[agentType] || 'Claude'}
               />
+              {inputMode !== 'shell' && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*,.pdf,.txt,.md,.log,.json,.csv"
+                    className="hidden"
+                    onChange={handleFilesPicked}
+                  />
+                  <button type="button" onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading || isDisabled}
+                    aria-label="附加圖片或檔案"
+                    title="附加圖片或檔案（上限 8 MB）"
+                    className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] text-[oklch(0.75_0.01_264)] hover:bg-[oklch(0.22_0.02_264)] disabled:opacity-40 text-sm">
+                    {uploading ? '…' : '📎'}
+                  </button>
+                </>
+              )}
               <div className="relative flex flex-1 min-w-0 items-end" ref={slashInputWrapRef}>
                 {slashMenuOpen && (
                   <SlashCommandMenu
@@ -694,7 +764,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   onSelect={(e) => syncComposerMenus(e.target.value, e.target.selectionStart, inputMode)}
                   onKeyDown={handleKeyDown}
                   disabled={isDisabled}
-                  placeholder={inputMode === 'shell' ? `輸入 ${shellType || 'Shell'} 指令…` : '輸入指令… @ 標記 session'}
+                  placeholder={inputMode === 'shell' ? `輸入 ${shellType || 'Shell'} 指令…` : canQueue ? '執行中…送出會排入佇列' : '輸入指令… @ 標記 session'}
                   rows={1}
                   className={[
                     'flex-1 min-w-0 w-full resize-none overflow-hidden border-0 bg-transparent px-1 py-1.5 text-[13.5px] leading-relaxed placeholder-[oklch(0.5_0.01_264)] focus:outline-none disabled:opacity-40 min-h-[2rem] max-h-[min(40vh,12rem)] box-border',
@@ -702,9 +772,17 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   ].join(' ')}
                 />
               </div>
+              {agentRunning && (
+                <button type="button" onClick={handleInterrupt}
+                  aria-label="中斷"
+                  title="中斷"
+                  className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] bg-red-900/70 hover:bg-red-800 text-red-200 text-sm">
+                  ■
+                </button>
+              )}
               <button type="button" onClick={() => handleSend()} disabled={isDisabled || !input.trim()}
-                aria-label="送出"
-                title="送出（Enter）"
+                aria-label={canQueue ? '排入佇列' : '送出'}
+                title={canQueue ? '排入佇列（Enter）' : '送出（Enter）'}
                 className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] ${inputMode === 'shell' ? 'bg-amber-700 hover:bg-amber-600' : 'bg-[oklch(0.62_0.19_275)] hover:brightness-110'} disabled:opacity-30 text-white transition-colors text-sm`}>
                 ➤
               </button>
@@ -734,6 +812,37 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       {lightboxSrc && (
         <ChatImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
+    </div>
+  );
+}
+
+/** 排隊中的訊息：每則可移除；暫停（前一輪失敗／中斷／拒絕授權）時需手動繼續。 */
+function QueuedMessages({ items, paused, canResume, onRemove, onResume }) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return (
+    <div className="mb-2 rounded-lg border border-[oklch(0.3_0.02_264)] bg-[oklch(0.18_0.02_264)] px-2 py-1.5 text-xs" aria-label="排隊中的訊息">
+      <div className="flex items-center justify-between mb-1 text-[oklch(0.65_0.01_264)]">
+        <span>{paused ? `⏸ 佇列已暫停（${items.length}）` : `佇列（${items.length}）· 完成後依序執行`}</span>
+        {canResume && (
+          <button type="button" onClick={onResume}
+            className="px-2 py-0.5 rounded bg-[oklch(0.62_0.19_275)] hover:brightness-110 text-white">
+            繼續
+          </button>
+        )}
+      </div>
+      <ol className="space-y-0.5">
+        {items.map((q, i) => (
+          <li key={q.id} className="flex items-center gap-1.5 text-[oklch(0.85_0.01_264)]">
+            <span className="shrink-0 font-mono text-[10px] text-[oklch(0.55_0.01_264)]">{i + 1}.</span>
+            <span className="min-w-0 flex-1 truncate" title={q.content}>{q.content}</span>
+            <button type="button" onClick={() => onRemove(q.id)}
+              aria-label="移除這則排隊訊息"
+              className="shrink-0 px-1 text-[oklch(0.6_0.01_264)] hover:text-red-300">
+              ×
+            </button>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

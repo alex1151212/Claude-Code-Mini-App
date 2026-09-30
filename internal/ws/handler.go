@@ -74,26 +74,29 @@ type clientMsg struct {
 	Mode   string   `json:"mode,omitempty"`
 	Model  string   `json:"model,omitempty"`
 	Effort string   `json:"effort,omitempty"`
+	ID     int64    `json:"id,omitempty"` // queue_remove 的目標
 }
 
 type serverMsg struct {
-	Type         string            `json:"type"`
-	Value        string            `json:"value,omitempty"`
-	Content      string            `json:"content,omitempty"`
-	ID           int64             `json:"id,omitempty"`
-	Tools        interface{}       `json:"tools,omitempty"`
-	Messages     json.RawMessage   `json:"messages,omitempty"`
-	InputMode    string            `json:"input_mode,omitempty"`
-	ShellType    string            `json:"shell_type,omitempty"`
-	WorkDir      string            `json:"work_dir,omitempty"`
-	Command      string            `json:"command,omitempty"`
-	Line         string            `json:"line,omitempty"`
-	WorkDirKey   string            `json:"work_dir_key,omitempty"`
-	Stream       string            `json:"stream,omitempty"`
-	ExitCode     int               `json:"exit_code,omitempty"`
-	ShellPending *shellPendingInfo `json:"shell_pending,omitempty"`
-	Quota        *quota.Payload    `json:"quota,omitempty"`
-	Model        *model.Payload    `json:"model,omitempty"`
+	Type         string             `json:"type"`
+	Value        string             `json:"value,omitempty"`
+	Content      string             `json:"content,omitempty"`
+	ID           int64              `json:"id,omitempty"`
+	Tools        interface{}        `json:"tools,omitempty"`
+	Messages     json.RawMessage    `json:"messages,omitempty"`
+	InputMode    string             `json:"input_mode,omitempty"`
+	ShellType    string             `json:"shell_type,omitempty"`
+	WorkDir      string             `json:"work_dir,omitempty"`
+	Command      string             `json:"command,omitempty"`
+	Line         string             `json:"line,omitempty"`
+	WorkDirKey   string             `json:"work_dir_key,omitempty"`
+	Stream       string             `json:"stream,omitempty"`
+	ExitCode     int                `json:"exit_code,omitempty"`
+	ShellPending *shellPendingInfo  `json:"shell_pending,omitempty"`
+	Quota        *quota.Payload     `json:"quota,omitempty"`
+	Model        *model.Payload     `json:"model,omitempty"`
+	Queue        []db.QueuedMessage `json:"queue,omitempty"`
+	QueuePaused  bool               `json:"queue_paused,omitempty"`
 }
 
 type shellPendingPayload struct {
@@ -171,6 +174,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			syncMsg.Quota = &p
 		}
 		syncMsg.Model = sessionModelPayload(sess)
+		syncMsg.Queue, syncMsg.QueuePaused = loadQueueState(database, sessionID)
 		send(syncMsg)
 
 		// 進入會話時若 quota cache 已過期，背景補打一次並推播更新（cache 未過期則 RefreshAfterRun 內部直接跳過）。
@@ -299,6 +303,19 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
 				finishShellNotify(botToken, tgUserID, notifyCfg, sess.Name, command, shellErrText, exitCode, interrupted && err == nil, err)
 			}(command, msgID, workDir)
+		}
+
+		// drainIfIdle 於 runAgent 之後賦值；先宣告讓任務 goroutine 收尾時可呼叫。
+		var drainIfIdle func()
+		broadcastQueue := func() {
+			q, paused := loadQueueState(database, sessionID)
+			broadcast(serverMsg{Type: "queue_update", Queue: q, QueuePaused: paused})
+		}
+		pauseQueue := func() {
+			if err := database.PauseQueueIfPending(sessionID); err != nil {
+				slog.Info(fmt.Sprintf("[ws] PauseQueueIfPending: %v", err))
+			}
+			broadcastQueue()
 		}
 
 		// runAgent：與 WS 解耦，任務在背景執行。
@@ -439,6 +456,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				taskEnd(sessionID, msgID)
 				broadcast(serverMsg{Type: "error", Content: err.Error()})
 				broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
+				pauseQueue()
 				notifyTaskAsync(botToken, tgUserID, notifyCfg, tg.TaskAlert{
 					SessionName: sess.Name,
 					AgentType:   agentType,
@@ -455,8 +473,22 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 				permDenied := false
 				runFailed := false
+				succeeded := false
 				errText := ""
 				var cancelled bool
+
+				// 收尾決定佇列走向。等授權時不動佇列；成功才續跑；失敗／中斷暫停，避免錯誤連鎖。
+				// 成功時先 taskEnd 解除登記，drainIfIdle 才會看到閒置（外層 defer taskEnd 之後自然 no-op）。
+				defer func() {
+					switch {
+					case permDenied:
+					case succeeded && !runFailed && !cancelled:
+						taskEnd(sessionID, msgID)
+						drainIfIdle()
+					default:
+						pauseQueue()
+					}
+				}()
 
 				// Kiro / Codex stream 不含 model，run 前解析並推送。
 				if agentType == agent.TypeKiro || agentType == agent.TypeKiroACP || agentType == agent.TypeCodex {
@@ -564,6 +596,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 						}
 
 						if !permDenied && !runFailed {
+							succeeded = true
 							if err := database.FinalizeMessage(msgID); err != nil {
 								slog.Info(fmt.Sprintf("[ws] FinalizeMessage: %v", err))
 							}
@@ -655,6 +688,93 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 					})
 				}
 			}(opts, msgID, prompt)
+		}
+
+		startInput := func(text string) {
+			if err := database.AddMessage(sessionID, "user", text); err != nil {
+				slog.Info(fmt.Sprintf("[ws] save user message: %v", err))
+			}
+			broadcast(serverMsg{Type: "user_message", Content: text})
+			runAgent(text, nil)
+		}
+
+		// agentBusy：此時送 input 會打斷進行中的工作（runAgent 開頭會 taskCancel），因此改排隊。
+		// 不看 DB status：awaiting_confirm 在 set_mode 等路徑不一定會被清掉，會讓閒置 session 永遠排隊。
+		// kiroacp 等授權時任務仍在跑（taskIsActive），Claude 等授權以 pending_denials 為準。
+		agentBusy := func(s *db.Session) bool {
+			return taskIsActive(sessionID) || shellTaskActive(sessionID) ||
+				strings.TrimSpace(s.PendingDenials) != ""
+		}
+
+		// drainQueueLocked 呼叫前須持有 dispatchLock。
+		drainQueueLocked := func() {
+			if paused, err := database.QueuePaused(sessionID); err != nil || paused {
+				return
+			}
+			q, err := database.PopQueuedMessage(sessionID)
+			if err != nil {
+				slog.Info(fmt.Sprintf("[ws] PopQueuedMessage: %v", err))
+				return
+			}
+			if q == nil {
+				return
+			}
+			broadcastQueue()
+			startInput(q.Content)
+		}
+
+		// dispatchInput：閒置就執行；忙碌就排隊（不打斷進行中的任務）。
+		queueHasItems := func() bool {
+			q, err := database.ListQueuedMessages(sessionID)
+			return err == nil && len(q) > 0
+		}
+		dispatchInput := func(text string) {
+			dl := dispatchLock(sessionID)
+			dl.Lock()
+			defer dl.Unlock()
+			s, err := database.GetSession(sessionID)
+			if err != nil {
+				slog.Info(fmt.Sprintf("[ws] GetSession (input): %v", err))
+				return
+			}
+			if strings.TrimSpace(s.ShellPending) != "" {
+				broadcast(serverMsg{Type: "error", Content: "請先處理待確認的 Shell 指令"})
+				return
+			}
+			if agentBusy(s) || queueHasItems() {
+				// 佇列還有東西（例如失敗後暫停）時也要排到尾端，否則閒置時的新 input 會插隊到舊項目前面。
+				if _, err := database.EnqueueMessage(sessionID, text); err != nil {
+					slog.Info(fmt.Sprintf("[ws] EnqueueMessage: %v", err))
+					broadcast(serverMsg{Type: "error", Content: err.Error()})
+					return
+				}
+				broadcastQueue()
+				// 閒置且未暫停（例如重啟前留下的佇列）：沒有任務收尾會觸發續跑，這裡直接取出最早的一則。
+				if !agentBusy(s) {
+					drainQueueLocked()
+				}
+				return
+			}
+			startInput(text)
+		}
+
+		// drainIfIdle：session 真的閒置時才取出下一則（任務成功收尾、授權解除、手動繼續共用）。
+		drainIfIdle = func() {
+			dl := dispatchLock(sessionID)
+			dl.Lock()
+			defer dl.Unlock()
+			if s, err := database.GetSession(sessionID); err == nil && !agentBusy(s) && strings.TrimSpace(s.ShellPending) == "" {
+				drainQueueLocked()
+			}
+			broadcastQueue()
+		}
+
+		resumeQueue := func() {
+			if err := database.SetQueuePaused(sessionID, false); err != nil {
+				slog.Info(fmt.Sprintf("[ws] SetQueuePaused: %v", err))
+				return
+			}
+			drainIfIdle()
 		}
 
 		startShellGoroutine := func(line string, absDir string) {
@@ -885,20 +1005,16 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			switch msg.Type {
 			case "input":
 				slog.Info(fmt.Sprintf("[ws] input len=%d", len(msg.Data)))
-				sIn, err := database.GetSession(sessionID)
-				if err != nil {
-					slog.Info(fmt.Sprintf("[ws] GetSession (input): %v", err))
-					continue
+				dispatchInput(msg.Data)
+
+			case "queue_remove":
+				if err := database.DeleteQueuedMessage(sessionID, msg.ID); err != nil {
+					slog.Info(fmt.Sprintf("[ws] DeleteQueuedMessage: %v", err))
 				}
-				if strings.TrimSpace(sIn.ShellPending) != "" {
-					broadcast(serverMsg{Type: "error", Content: "請先處理待確認的 Shell 指令"})
-					continue
-				}
-				if err := database.AddMessage(sessionID, "user", msg.Data); err != nil {
-					slog.Info(fmt.Sprintf("[ws] save user message: %v", err))
-				}
-				broadcast(serverMsg{Type: "user_message", Content: msg.Data})
-				runAgent(msg.Data, nil)
+				broadcastQueue()
+
+			case "queue_resume":
+				resumeQueue()
 
 			case "set_input_mode":
 				sx, err := database.GetSession(sessionID)
@@ -1034,6 +1150,8 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 					continue
 				}
 				clearPendingDenials(database, sessionID)
+				// 使用者拒絕代表計畫被打斷，後面排隊的不自動接著跑。
+				pauseQueue()
 				runAgent("[Permission denied by user. Please acknowledge that you cannot perform the requested operation and stop.]", nil)
 
 			case "set_mode":
@@ -1053,8 +1171,16 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				if err := database.UpdatePermissionMode(sessionID, msg.Mode); err != nil {
 					slog.Info(fmt.Sprintf("[ws] UpdatePermissionMode: %v", err))
 				}
+				// 「允許並記住」會走到這裡：授權已解除但 status 原本不會被改回，重連時 sync 仍顯示等授權。
+				if sMode.Status == db.SessionStatusAwaitingConfirm && !taskIsActive(sessionID) {
+					if err := database.UpdateSessionStatus(sessionID, db.SessionStatusIdle); err != nil {
+						slog.Info(fmt.Sprintf("[ws] UpdateSessionStatus idle (set_mode): %v", err))
+					}
+				}
 				broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
 				slog.Info(fmt.Sprintf("[ws] permission mode: %v", msg.Mode))
+				// 等授權期間排隊的訊息：授權解除後接著跑（非失敗，不暫停）。
+				drainIfIdle()
 
 			case "set_model":
 				if err := database.UpdateModel(sessionID, strings.TrimSpace(msg.Model)); err != nil {
@@ -1090,6 +1216,10 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				}
 				clearPendingDenials(database, sessionID)
 				clearShellPending(database, sessionID)
+				if err := database.ClearQueuedMessages(sessionID); err != nil {
+					slog.Info(fmt.Sprintf("[ws] ClearQueuedMessages: %v", err))
+				}
+				broadcastQueue()
 				if err := database.UpdateSessionStatus(sessionID, db.SessionStatusIdle); err != nil {
 					slog.Info(fmt.Sprintf("[ws] UpdateSessionStatus idle: %v", err))
 				}
@@ -1106,7 +1236,10 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				// 兩段式停止：第一次按只送優雅信號（可能被子進程忽略，狀態/DB 不動，任務繼續跑）；
 				// 第二次按（或 PID 還沒拿到）才 cancel context 強制 KillTree，
 				// 收尾一律由 Run goroutine 的既有邏輯處理，避免前端提早變 IDLE 但進程還在跑。
-				taskInterrupt(sessionID)
+				// 使用者按停止＝不要自動接著跑：軟中斷時子進程可能仍正常結束（exit 0），不暫停會續跑佇列。
+				if taskInterrupt(sessionID) {
+					pauseQueue()
+				}
 
 			case "shell_allow_once":
 				handleShellAllowExecute(false)

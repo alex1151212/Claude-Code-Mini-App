@@ -18,6 +18,9 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [sessionModel, setSessionModel] = useState(null);
   const [activityHint, setActivityHint] = useState('');
+  /** 執行中先送出、等待前一輪完成的訊息（後端持久化，sync / queue_update 同步） */
+  const [queue, setQueue] = useState([]);
+  const [queuePaused, setQueuePaused] = useState(false);
 
   const shellBuf = useRef([]);
   const shellRenderPending = useRef(false);
@@ -45,6 +48,8 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     setState('IDLE');
     setPermTools([]);
     setShellRequest(null);
+    setQueue([]);
+    setQueuePaused(false);
     const im =
       session.input_mode === 'shell' || session.input_mode === 'agent'
         ? session.input_mode
@@ -157,6 +162,14 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
           }
           if (msg.quota) setQuota(msg.quota);
           if (msg.model) setSessionModel(msg.model);
+          setQueue(msg.queue || []);
+          setQueuePaused(!!msg.queue_paused);
+          return;
+        }
+
+        if (msg.type === 'queue_update') {
+          setQueue(msg.queue || []);
+          setQueuePaused(!!msg.queue_paused);
           return;
         }
 
@@ -488,6 +501,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     quota, quotaRefreshing,
     sessionModel,
     activityHint,
+    queue, queuePaused,
     send,
     flushPendingModes,
     handleQuotaRefresh,

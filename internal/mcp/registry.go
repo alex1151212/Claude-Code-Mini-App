@@ -6,10 +6,12 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/fasthttp/websocket"
 )
@@ -36,6 +38,8 @@ type sessionState struct {
 	pendingPermission json.RawMessage
 	pendingShellCmd   *pendingShell
 	lastErr           string
+	// turnDone 由 send 建立，本輪離開 running（idle／等授權／等 shell 確認）或連線中斷時關閉，供 ask_session 等待。
+	turnDone chan struct{}
 	// writeMu 序列化 conn 寫入：websocket 只允許單一並行 writer，多個 MCP 呼叫同時操作同一 session 會寫壞 frame。
 	writeMu sync.Mutex
 }
@@ -44,6 +48,14 @@ func (s *sessionState) writeJSON(v any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.conn.WriteJSON(v)
+}
+
+// endTurnLocked 呼叫前須持有 s.mu。
+func (s *sessionState) endTurnLocked() {
+	if s.turnDone != nil {
+		close(s.turnDone)
+		s.turnDone = nil
+	}
 }
 
 func (s *sessionState) snapshot() (state, text string, perm json.RawMessage, shell *pendingShell, lastErr string) {
@@ -79,6 +91,7 @@ func normalizeState(v string) string {
 type Registry struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionState
+	askLocks sync.Map                      // sessionID → *sync.Mutex
 	wsURL    func(sessionID string) string // ws://127.0.0.1:<port>/sessions/:id/ws
 	header   http.Header                   // 帶 mcp_token 的 Authorization header
 }
@@ -128,6 +141,12 @@ func (r *Registry) readLoop(sessionID string, st *sessionState) {
 			delete(r.sessions, sessionID)
 		}
 		r.mu.Unlock()
+		st.mu.Lock()
+		if st.turnDone != nil {
+			st.lastErr = "與 session 的連線中斷"
+			st.endTurnLocked()
+		}
+		st.mu.Unlock()
 		st.conn.Close()
 	}()
 	for {
@@ -161,14 +180,29 @@ func (r *Registry) readLoop(sessionID string, st *sessionState) {
 		case "shell_error", "error":
 			st.lastErr = ev.Content
 		}
+		// 只在「本輪最後一個事件」結束：message_result_text／shell_done 後面還會跟一個 status，
+		// 若提早結束，那個尾巴 status 會把下一輪誤判成已完成。等授權則等 permission_request（帶內容）才算。
+		switch {
+		case ev.Type == "status" && st.state == StateIdle,
+			ev.Type == "permission_request",
+			ev.Type == "shell_command_request",
+			ev.Type == "shell_approval_request":
+			st.endTurnLocked()
+		}
 		st.mu.Unlock()
 	}
 }
 
 func (r *Registry) send(sessionID string, payload any) error {
+	_, _, err := r.begin(sessionID, payload)
+	return err
+}
+
+// begin 送出一輪操作並回傳本輪的結束通知 channel。
+func (r *Registry) begin(sessionID string, payload any) (<-chan struct{}, *sessionState, error) {
 	st, err := r.ensure(sessionID)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	st.mu.Lock()
 	// 新一輪操作開始：清掉上一輪殘留的文字/錯誤，讓 get_status 只看到這一輪的結果。
@@ -176,8 +210,55 @@ func (r *Registry) send(sessionID string, payload any) error {
 	st.lastErr = ""
 	st.pendingPermission = nil
 	st.state = StateRunning
+	st.endTurnLocked() // 上一輪若還有人在等，視為結束（被新操作取代）
+	done := make(chan struct{})
+	st.turnDone = done
 	st.mu.Unlock()
-	return st.writeJSON(payload)
+	return done, st, st.writeJSON(payload)
+}
+
+// AskResult 是 ask_session 等到的一輪結果。
+type AskResult struct {
+	State             string
+	Text              string
+	PendingPermission json.RawMessage
+	Error             string
+	TimedOut          bool
+}
+
+// Ask 送出訊息並阻塞到該輪結束、timeout 或 ctx 取消。timeout 時回傳目前累積的部分文字。
+// ponytail: 同一目標 session 的 Ask 以 askLock 序列化，但 send_message／set_model 等其他 begin() 呼叫不受此鎖；
+// 它們會結束目前這輪，等待中的 Ask 以 Error 回報「被中斷」。要嚴格互斥就得改成依 msgID 追蹤每一輪。
+func (r *Registry) Ask(ctx context.Context, sessionID, text string, timeout time.Duration) (AskResult, error) {
+	lock := r.askLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	done, st, err := r.begin(sessionID, map[string]string{"type": "input", "data": text})
+	if err != nil {
+		return AskResult{}, err
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	var timedOut bool
+	select {
+	case <-done:
+	case <-timer.C:
+		timedOut = true
+	case <-ctx.Done():
+		return AskResult{}, ctx.Err()
+	}
+	state, latest, perm, _, lastErr := st.snapshot()
+	// 沒逾時卻還是 running：本輪被同 session 的其他操作（set_model 等 send）取代，結果不完整。
+	if !timedOut && state == StateRunning && lastErr == "" {
+		lastErr = "本輪等待被同一 session 的其他操作中斷，回覆可能不完整；請用 get_status 查看"
+	}
+	return AskResult{State: state, Text: latest, PendingPermission: perm, Error: lastErr, TimedOut: timedOut}, nil
+}
+
+func (r *Registry) askLock(sessionID string) *sync.Mutex {
+	m, _ := r.askLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // Status 回傳目前狀態快取，供 get_status tool 使用。

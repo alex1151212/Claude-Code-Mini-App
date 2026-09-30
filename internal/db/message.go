@@ -1,6 +1,10 @@
 package db
 
-import "strings"
+import (
+	"database/sql"
+	"errors"
+	"strings"
+)
 
 const (
 	MessageStatusPending = "pending"
@@ -25,6 +29,19 @@ func (db *DB) AddMessage(sessionID, role, content string) error {
 		sessionID, role, content, MessageStatusDone,
 	)
 	return err
+}
+
+// LatestUserMessage 回傳 session 最近一則 user 訊息內容；沒有時回空字串。
+func (db *DB) LatestUserMessage(sessionID string) (string, error) {
+	var content string
+	err := db.QueryRow(
+		`SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
+		sessionID,
+	).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return content, err
 }
 
 // CreatePendingMessage inserts an empty assistant row with status=pending.

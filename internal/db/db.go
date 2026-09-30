@@ -76,6 +76,13 @@ func (db *DB) migrate() error {
 		CREATE TABLE IF NOT EXISTS work_dirs (
 			path TEXT PRIMARY KEY
 		);
+		CREATE TABLE IF NOT EXISTS queued_messages (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			content    TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_queued_messages_session ON queued_messages (session_id, id);
 	`)
 	if err != nil {
 		return err
@@ -118,6 +125,8 @@ func (db *DB) migrate() error {
 	tryAlter(`ALTER TABLE sessions ADD COLUMN effort TEXT NOT NULL DEFAULT ''`)
 	// last_read_at：使用者最後一次「正在看」此 session 的時間；配合 last_active 判斷未讀。
 	tryAlter(`ALTER TABLE sessions ADD COLUMN last_read_at TEXT NOT NULL DEFAULT ''`)
+	// queue_paused：上一個任務失敗／中斷時佇列暫停，需使用者手動繼續。
+	tryAlter(`ALTER TABLE sessions ADD COLUMN queue_paused INTEGER NOT NULL DEFAULT 0`)
 
 	// 既有 session 的 work_dir 補進目錄清單
 	if err := db.seedWorkDirsFromSessions(); err != nil {

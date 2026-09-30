@@ -57,7 +57,7 @@ function expandMentionPrompt(text, self, mentionedSessions) {
     lines.push(formatMiniappSessionLine('mention', s));
   }
   if (seen.size === 0) return src;
-  lines.push('上述 mention 標記的是可詢問／討論的對象。請用 miniapp MCP send_message(session_id=<mention>, from_session_id=<self>, text=...) 向對方提問，再用 get_status 讀回覆。');
+  lines.push('上述 mention 標記的是可詢問／討論的對象。請用 miniapp MCP ask_session(session_id=<mention>, from_session_id=<self>, text=...) 向對方提問，會直接等到回答；對方忙碌時改用 send_message（會排隊），再用 get_status 讀回覆。');
   lines.push('[/miniapp]', '', src);
   return lines.join('\n');
 }

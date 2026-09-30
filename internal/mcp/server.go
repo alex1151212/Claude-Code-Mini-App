@@ -13,10 +13,12 @@ import (
 // NewHTTPHandler 建立掛在 /mcp 的 Streamable HTTP handler。
 // selfPort 是本服務自己監聽的 port，用來 loopback 撥打 /sessions/:id/ws。
 // mcpToken 會原樣帶進 loopback WS 連線的 Authorization header，讓它通過既有 authMiddleware。
-func NewHTTPHandler(database *db.DB, quotaSvc *quota.Service, selfPort int, mcpToken string) http.Handler {
+// maxHops 是 session 互問跳數上限；<=0 用 DefaultMaxHops。
+func NewHTTPHandler(database *db.DB, quotaSvc *quota.Service, selfPort int, mcpToken string, maxHops int) http.Handler {
 	d := &deps{
-		db:    database,
-		quota: quotaSvc,
+		db:      database,
+		quota:   quotaSvc,
+		maxHops: maxHops,
 	}
 	header := http.Header{}
 	if mcpToken != "" {
