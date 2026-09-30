@@ -2,7 +2,7 @@
 
 > 用手機 Telegram 遠端操控伺服器上的 AI 編碼 CLI。**單一 Go 二進位**同時提供 REST、WebSocket 與 UI，無需獨立前端建置。
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue)](#) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](#)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](#) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](#)
 
 [English](README.md)
 
@@ -25,11 +25,13 @@ cp config.example.yaml config.yaml   # 填 bot_token、whitelist_tg_ids
 - **程式碼區塊** — 語法高亮 + 語言標籤，一鍵複製
 - **用量徽章** — Session header 顯示帳戶用量（如 Claude `5h 16% · Week 9%`）
 - **Session 管理** — 多對話、各自綁定 `work_dir` 與權限模式
+- **訊息佇列** — 執行中送出的訊息會排隊（存 DB、重啟不遺失）依序執行；失敗／中斷時暫停，可手動繼續或移除
+- **附件上傳** — 📎 上傳圖片／文字檔到 `work_dir`，以路徑交給 agent 讀取
 - **未讀追蹤** — 列表標示有新動態的 Session，可一鍵「全部標為已讀」
 - **權限流程** — Claude 遭拒時可「允許一次」或切換模式；Kiro ACP 支援回合中途授權
 - **驗證** — Telegram `initData` + 白名單；可選內網密碼登入
 - **選用 Shell** — 於 `work_dir` 執行指令（預設關閉）；開啟後會在會話 header 顯示「開啟 VSCode／開啟目錄」按鈕（僅桌面版）
-- **MCP server** — 透過 Streamable HTTP（`POST /mcp`）讓其他 agent 操作 session、讀聊天紀錄、查跨 session 活動（預設關閉）
+- **MCP server** — 透過 Streamable HTTP（`POST /mcp`）讓其他 agent 操作 session、讀聊天紀錄、查跨 session 活動；`ask_session` 同步詢問另一個 session 並取回答覆，互問有跳數上限（`mcp_max_hops`）防止無限迴圈（預設關閉）
 
 ## 為什麼用這個？
 
@@ -59,6 +61,7 @@ Telegram Mini App / 瀏覽器
 - 勿將含真實憑證的設定提交版本庫；生產環境勿開 `no_auth`。
 - **`shell.enabled`** 會讓已驗證使用者在主機上執行 shell — 僅在可信網路啟用。白名單規則：[`docs/spec/shell-allowlist-schema.md`](docs/spec/shell-allowlist-schema.md)。
 - **`mcp_token`** 持有者可完全操控所有 session（含 shell）— 比照 `bot_token` 等級保管，`/mcp` 僅在可信網路開放。
+- **上傳**（`POST /sessions/:id/uploads`）讓已驗證使用者把白名單檔案（圖片、pdf、txt/md/log/json/csv；≤ 8 MB；檔名由伺服器產生）寫入 `<work_dir>/.miniapp/uploads/`，不受 `shell.enabled` 控制。
 
 ## 文件
 

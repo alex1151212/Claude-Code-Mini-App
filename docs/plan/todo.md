@@ -1,12 +1,19 @@
 # 工作清單 (Todo)
 
-> 對應 `docs/plan.md` 的 Phase 與進階擴充。已完成的項目請移至 `docs/plan/done/`。
+> 整體方向見 `docs/plan/roadmap.md`。已完成的項目請移至 `docs/plan/done/`。
 
 ---
 
 ## 🚀 待執行項目
+- [ ] 手機實機驗證：TG WebView（iOS／Android）📎 檔案選擇器、佇列 UI
+- [ ] 驗證 Codex／Cursor／Kiro 能以絕對路徑讀取上傳的圖片（Claude 的 Read 工具可讀圖）
+- [ ] （另案）`internal/static/uploads` 掛在未驗證的 `app.Static` 下，agent 截圖知道 URL 即可讀
 
-（目前無待執行項目）
+## ✅ 本輪完成（2026-09-30）
+- [x] 訊息佇列：執行中送出的訊息排隊、完成後自動續跑、失敗／中斷／拒絕授權暫停（存 DB）
+- [x] MCP envelope hop 計數（預設上限 5，`mcp_max_hops` 可設）
+- [x] MCP `ask_session`：阻塞等回覆 + timeout
+- [x] 上傳圖片／檔案給 agent（存 `<work_dir>/.miniapp/uploads/`，`.miniapp/` 內附 `.gitignore` 避免誤 commit）
 
 ---
 

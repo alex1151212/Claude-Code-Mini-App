@@ -4,7 +4,9 @@
 讓目前 session 的 agent 能用既有 miniapp MCP，向 `@` 標記的其他 session **詢問／討論**。這不是 Forward（把舊訊息轉寄過去）。
 
 ## 範圍
-- MCP `send_message`：選填 `from_session_id`；有帶則蓋上自介 header + 回覆署名 footer
+- MCP `send_message`：選填 `from_session_id`；有帶則蓋上自介 header + 回覆署名 footer（目標忙碌時排入佇列）
+- MCP `ask_session`：阻塞等目標這一輪回答完（timeout 預設 600s／上限 1800s）；目標須閒置
+- envelope 帶 `hop: N`，超過 `mcp_max_hops`（預設 5）拒絕；使用者直接輸入會歸零
 - Web 輸入框 `@` 選單：插入 `@[名稱](session:<uuid>)` token
 - 送出時前置 `[miniapp] self / mention`，指示當前 agent 用 MCP 提問
 

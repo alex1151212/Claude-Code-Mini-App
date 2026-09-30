@@ -2,7 +2,7 @@
 
 > Remote AI coding CLIs from your phone via Telegram. **One Go binary** — REST, WebSocket, and UI, no separate frontend build.
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue)](#) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](#)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](#) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](#)
 
 [繁體中文](README.zh-TW.md)
 
@@ -25,11 +25,13 @@ cp config.example.yaml config.yaml   # set bot_token, whitelist_tg_ids
 - **Code blocks** — syntax highlighting with language tag, one-click copy
 - **Quota badge** — Session header shows usage (e.g. Claude `5h 16% · Week 9%`)
 - **Sessions** — Multiple conversations, each with its own `work_dir` and permission mode
+- **Message queue** — Messages sent while a task is running are queued (persisted in the DB, survives restarts) and run in order; the queue pauses on failure or interrupt, and can be resumed or edited
+- **Attachments** — 📎 upload images / text files into `work_dir` and hand them to the agent by path
 - **Unread tracking** — Sessions with new activity are marked unread in the list; "read all" to clear
 - **Permissions** — Claude denial flow; Kiro ACP mid-turn approval; approve once or switch mode from the UI
 - **Auth** — Telegram `initData` + allowlist; optional web login on private IPs
 - **Optional shell** — Run commands in `work_dir` (off by default); when on, also shows "Open in VS Code" / "Open folder" buttons in the session header (desktop only)
-- **MCP server** — Expose sessions to other agents over Streamable HTTP (`POST /mcp`, off by default): operate sessions, read chat history, and query cross-session activity
+- **MCP server** — Expose sessions to other agents over Streamable HTTP (`POST /mcp`, off by default): operate sessions, read chat history, and query cross-session activity; `ask_session` asks another session and waits for its answer, with a hop limit (`mcp_max_hops`) to stop agent-to-agent loops
 
 ## Why this?
 
@@ -59,6 +61,7 @@ Each user message spawns a short-lived subprocess. Details: [`docs/spec/plan.md`
 - Keep real secrets out of git; never use `no_auth` in production.
 - **`shell.enabled`** grants shell access on the host to authenticated users — enable only on trusted networks. Allowlist rules: [`docs/spec/shell-allowlist-schema.md`](docs/spec/shell-allowlist-schema.md).
 - **`mcp_token`** grants full session control (including shell) to any client holding it — treat it like `bot_token` and only expose `/mcp` on trusted networks.
+- **Uploads** (`POST /sessions/:id/uploads`) let any authenticated user write whitelisted files (images, pdf, txt/md/log/json/csv; ≤ 8 MB; server-generated names) into `<work_dir>/.miniapp/uploads/`, independent of `shell.enabled`.
 
 ## Documentation
 
