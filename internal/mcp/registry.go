@@ -36,6 +36,14 @@ type sessionState struct {
 	pendingPermission json.RawMessage
 	pendingShellCmd   *pendingShell
 	lastErr           string
+	// writeMu 序列化 conn 寫入：websocket 只允許單一並行 writer，多個 MCP 呼叫同時操作同一 session 會寫壞 frame。
+	writeMu sync.Mutex
+}
+
+func (s *sessionState) writeJSON(v any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.conn.WriteJSON(v)
 }
 
 func (s *sessionState) snapshot() (state, text string, perm json.RawMessage, shell *pendingShell, lastErr string) {
@@ -100,6 +108,12 @@ func (r *Registry) ensure(sessionID string) (*sessionState, error) {
 
 	st = &sessionState{conn: conn, state: StateIdle}
 	r.mu.Lock()
+	// 並行呼叫時可能兩邊都 dial 了：以先登記者為準，自己這條關掉，避免兩條連線、狀態快取分裂。
+	if cur, ok := r.sessions[sessionID]; ok && cur.conn != nil {
+		r.mu.Unlock()
+		conn.Close()
+		return cur, nil
+	}
 	r.sessions[sessionID] = st
 	r.mu.Unlock()
 
@@ -110,7 +124,9 @@ func (r *Registry) ensure(sessionID string) (*sessionState, error) {
 func (r *Registry) readLoop(sessionID string, st *sessionState) {
 	defer func() {
 		r.mu.Lock()
-		delete(r.sessions, sessionID)
+		if r.sessions[sessionID] == st { // 只刪自己，別刪到之後重連的新 entry
+			delete(r.sessions, sessionID)
+		}
 		r.mu.Unlock()
 		st.conn.Close()
 	}()
@@ -160,9 +176,8 @@ func (r *Registry) send(sessionID string, payload any) error {
 	st.lastErr = ""
 	st.pendingPermission = nil
 	st.state = StateRunning
-	conn := st.conn
 	st.mu.Unlock()
-	return conn.WriteJSON(payload)
+	return st.writeJSON(payload)
 }
 
 // Status 回傳目前狀態快取，供 get_status tool 使用。
@@ -213,5 +228,5 @@ func (r *Registry) Interrupt(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	return st.conn.WriteJSON(map[string]string{"type": "interrupt"})
+	return st.writeJSON(map[string]string{"type": "interrupt"})
 }
