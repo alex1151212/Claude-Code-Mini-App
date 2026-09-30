@@ -132,15 +132,12 @@ func formatKiroDisplay(info *usage.QuotaInfo) string {
 
 func formatCodexDisplay(info *usage.QuotaInfo) string {
 	var sessPct, weekPct *float64
-	var tokens *float64
 	for _, w := range info.Windows {
 		switch w.Kind {
 		case "session":
 			sessPct = w.Percent
 		case "weekly":
 			weekPct = w.Percent
-		case "tokens":
-			tokens = w.Used
 		}
 	}
 	if sessPct != nil && weekPct != nil {
@@ -151,9 +148,6 @@ func formatCodexDisplay(info *usage.QuotaInfo) string {
 	}
 	if weekPct != nil {
 		return fmt.Sprintf("Week %.0f%%", roundPct(*weekPct))
-	}
-	if tokens != nil {
-		return fmt.Sprintf("Tokens %.0f", *tokens)
 	}
 	return "—"
 }

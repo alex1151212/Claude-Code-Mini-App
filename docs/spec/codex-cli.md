@@ -3,29 +3,59 @@
 Codex 的非互動模式是 `codex exec`，官方明確說這是給 script、CI、pipeline 用的，並且 `--json` 會把 stdout 變成 JSON Lines 事件流。 
 因此在你的系統裡，Codex 至少應拆成兩種可選 transport：**CLI subprocess transport**（先做這個）與 **app-server protocol transport**（後續若你要更原生的雙向通訊再做）。 
 
-## 實測整合結論（codex-cli 0.142.5，POC 2026-07-06）
+## 實測整合結論（codex-cli 0.159.2，2026-09-30；初版 0.142.5 / 2026-07-06）
 
 ### Headless 啟動模板
 
 ```bash
 # 新 thread
-codex exec --json --skip-git-repo-check --yolo -C <work_dir> "<prompt>"
+codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -C <work_dir> "<prompt>"
 
 # Resume（注意：resume 子命令不支援 -C，工作目錄由 Go cmd.Dir 設定）
-codex exec resume <thread_id> --json --skip-git-repo-check --yolo "<prompt>"
+codex exec resume <thread_id> --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "<prompt>"
 ```
 
 ### 與官方文件的差異
 
-| 項目 | 官方文件 | 實測（v0.142.5） |
+| 項目 | 官方文件 | 實測（v0.159.2） |
 |------|----------|------------------|
-| 免互動授權 | `--ask-for-approval never`（頂層 `codex`） | `codex exec` 需用 `-c 'approval_policy="never"'` |
-| Trust-all 語意 | 無 `--trust-all-tools` | `-s workspace-write` + `approval_policy="never"` |
-| stdin | 可選 | **必須關閉 stdin**（否則等待 stdin 或 stderr 提示 Reading additional input） |
+| 免互動授權 | `--dangerously-bypass-approvals-and-sandbox` | 同左；`--yolo` 已從 help 移除但仍為隱藏別名（勿再使用） |
+| stdin | 可選 | **必須關閉 stdin**；即使關閉，stderr 仍固定印 `Reading additional input from stdin...`（非錯誤，runner 會過濾） |
 | TERM 環境變數 | — | headless spawn 時應移除 `TERM=dumb` |
-| thread_id | `thread.started` | 確認可用 |
-| 逐字 delta | — | **無**；`item.completed (agent_message)` 一次送出 |
-| Quota | `/status` TUI | headless `/status` 可能觸發 sandbox 錯誤；quota fetch 改以 status prompt + `turn.completed.usage` fallback |
+| thread_id | `thread.started` | 確認可用；resume 時回傳同一 id |
+| 逐字 delta | — | **無**；`item.completed (agent_message)` 一次送出；工具呼叫前後各一段，runner 以空行分段 |
+| `command_execution` item | — | 帶 `command` / `aggregated_output` / `exit_code` / `status` |
+| `turn.completed.usage` | — | 新增 `cache_write_input_tokens` |
+| Quota | `/status` TUI | 模型本身**拿不到**用量（問它只會回 unavailable 且耗額度）；改讀本機 rollout 檔，見下 |
+
+### 錯誤事件序列（無效 model，exit 1）
+
+```
+thread.started
+item.completed  {item.type: "error", message: "Model metadata ... not found"}   ← 警告，非致命
+turn.started
+error           {message: "{\"type\":\"error\",\"status\":400,\"error\":{\"message\":\"...\"}}"}
+turn.failed     {error: {message: "<同上 JSON 字串>"}}
+```
+
+- `message` 是整包 API 錯誤 JSON 字串，需解出內層 `error.message`（`codex.ErrorMessage`）。
+- `error` 可能是可恢復的（例如重連），runner 只在 `turn.failed` 或未收到 `turn.completed` 時才回報，且每回合只回報一次。
+
+### Quota 來源：rollout 檔 rate_limits
+
+每回合 codex 會在 `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl`（預設 `~/.codex`）寫入 `type=event_msg`、`payload.type=token_count` 的行：
+
+```json
+"rate_limits": {
+  "primary":   {"used_percent": 2.0, "window_minutes": 300,   "resets_at": 1790767809},
+  "secondary": {"used_percent": 0.0, "window_minutes": 10080, "resets_at": 1791354609},
+  "plan_type": "plus"
+}
+```
+
+- `internal/quota/codex.go` 依 mtime 取最新含 rate_limits 的檔（resume 舊 thread 會寫回原日期目錄，須全樹依 mtime 排序）。
+- 依 `window_minutes` 分類 5h / 週窗；`resets_at` 已過視為 0%。
+- 失敗回合（如無效 model）的 rollout 檔不含 rate_limits，會被略過。
 
 ### POC 樣本
 

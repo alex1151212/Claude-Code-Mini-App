@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const sampleClaudeUsageText = `You are currently using your subscription to power your Claude Code usage
@@ -67,13 +68,28 @@ func TestFromKiroUsageText(t *testing.T) {
 	}
 }
 
-func TestFromCodexStatusText(t *testing.T) {
-	q := FromCodexStatusText("5-hour limit: 16% used\nWeekly limit: 9% used")
-	if q == nil || len(q.Windows) != 2 {
-		t.Fatalf("windows: %+v", q)
+func TestFromCodexRolloutLine(t *testing.T) {
+	line := []byte(`{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":40,"window_minutes":300,"resets_at":2000},"secondary":{"used_percent":9,"window_minutes":10080,"resets_at":9000},"plan_type":"plus"}}}`)
+
+	q := FromCodexRolloutLine(line, time.Unix(1000, 0))
+	if q == nil || len(q.Windows) != 2 || q.Plan != "plus" {
+		t.Fatalf("q=%+v", q)
 	}
-	if *q.Windows[0].Percent != 16 || *q.Windows[1].Percent != 9 {
-		t.Fatalf("percent: %+v", q.Windows)
+	if q.Windows[0].Kind != "session" || *q.Windows[0].Percent != 40 {
+		t.Fatalf("session: %+v", q.Windows[0])
+	}
+	if q.Windows[1].Kind != "weekly" || *q.Windows[1].Percent != 9 {
+		t.Fatalf("weekly: %+v", q.Windows[1])
+	}
+
+	// 5h 窗已過 resets_at → 0%；週窗未過維持原值。
+	q = FromCodexRolloutLine(line, time.Unix(3000, 0))
+	if *q.Windows[0].Percent != 0 || *q.Windows[1].Percent != 9 {
+		t.Fatalf("after reset: %+v", q.Windows)
+	}
+
+	if FromCodexRolloutLine([]byte(`{"type":"event_msg","payload":{"type":"token_count","rate_limits":null}}`), time.Now()) != nil {
+		t.Fatal("null rate_limits should be nil")
 	}
 }
 

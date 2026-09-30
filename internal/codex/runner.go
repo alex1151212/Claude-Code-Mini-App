@@ -118,16 +118,12 @@ func (r *Runner) Run(ctx context.Context, opts agent.RunOptions, cb agent.EventC
 	}
 	duration := time.Since(start)
 
+	if ctx.Err() == nil {
+		st.finish(cb, waitErr, stderrBuf.String())
+	}
 	if waitErr != nil && ctx.Err() == nil {
-		if !st.sawTurnCompleted {
-			cb(agent.Event{Type: agent.EventError, Err: classifyRunnerError(stderrBuf.String(), waitErr)})
-		}
 		slog.Error("[codex] run 結束", "session_id", sessionID, "duration", duration, "lines", lineCount, "ok", false, "err", waitErr)
 		return waitErr
-	}
-
-	if !st.sawTurnCompleted && ctx.Err() == nil {
-		cb(agent.Event{Type: agent.EventError, Err: errors.New("codex 串流中斷：未收到 turn.completed")})
 	}
 	slog.Info("[codex] run 結束", "session_id", sessionID, "duration", duration, "lines", lineCount, "ok", true)
 	cb(agent.Event{Type: agent.EventDone, SessionID: sessionID})
@@ -137,6 +133,33 @@ func (r *Runner) Run(ctx context.Context, opts agent.RunOptions, cb agent.EventC
 type dispatchState struct {
 	sawTurnCompleted bool
 	sessionID        string
+	agentMsgs        int
+	lastErr          string // 最近一次 error 事件；可能是可恢復的，未必代表回合失敗
+	errSent          bool
+}
+
+// emitError 保證同一回合只回報一次錯誤（codex 失敗時會連發 error + turn.failed）。
+func (st *dispatchState) emitError(cb agent.EventCallback, err error) {
+	if st.errSent {
+		return
+	}
+	st.errSent = true
+	cb(agent.Event{Type: agent.EventError, Err: err})
+}
+
+// finish 在串流結束後決定是否補報錯誤：未完成回合時，優先用 stream 內的錯誤訊息，其次 stderr。
+func (st *dispatchState) finish(cb agent.EventCallback, waitErr error, stderr string) {
+	if st.sawTurnCompleted {
+		return
+	}
+	switch {
+	case st.lastErr != "":
+		st.emitError(cb, errors.New(st.lastErr))
+	case waitErr != nil:
+		st.emitError(cb, classifyRunnerError(stderr, waitErr))
+	default:
+		st.emitError(cb, errors.New("codex 串流中斷：未收到 turn.completed"))
+	}
 }
 
 func (r *Runner) dispatch(ev *StreamEvent, cb agent.EventCallback, st *dispatchState) {
@@ -153,13 +176,24 @@ func (r *Runner) dispatch(ev *StreamEvent, cb agent.EventCallback, st *dispatchS
 			}
 		}
 	case "item.completed":
+		if ev.Item != nil && ev.Item.Type == "error" {
+			// 非致命警告（例如 model metadata 找不到），不中斷回合，只留 log 供排查。
+			slog.Warn("[codex] warning item", "message", ev.Item.Message)
+		}
 		if text := AgentMessageText(ev.Item); text != "" {
+			// 工具呼叫前後會各有一段 agent_message，不分段會黏成一句。
+			if st.agentMsgs > 0 {
+				text = "\n\n" + text
+			}
+			st.agentMsgs++
 			cb(agent.Event{Type: agent.EventDelta, Text: text})
 		}
 	case "turn.completed":
 		st.sawTurnCompleted = true
-	case "turn.failed", "error":
-		cb(agent.Event{Type: agent.EventError, Err: errors.New(ErrorMessage(ev))})
+	case "error":
+		st.lastErr = ErrorMessage(ev)
+	case "turn.failed":
+		st.emitError(cb, errors.New(ErrorMessage(ev)))
 	}
 }
 
@@ -168,7 +202,7 @@ func buildArgs(opts agent.RunOptions) []string {
 		args := []string{
 			"exec", "resume", opts.SessionID,
 			"--json", "--skip-git-repo-check",
-			"--yolo",
+			"--dangerously-bypass-approvals-and-sandbox",
 		}
 		if opts.ExtraArgs != nil {
 			if m := strings.TrimSpace(opts.ExtraArgs[agent.ArgModel]); m != "" {
@@ -184,7 +218,7 @@ func buildArgs(opts agent.RunOptions) []string {
 
 	args := []string{
 		"exec", "--json", "--skip-git-repo-check",
-		"--yolo",
+		"--dangerously-bypass-approvals-and-sandbox",
 		"-C", opts.WorkDir,
 	}
 	if opts.ExtraArgs != nil {
@@ -210,8 +244,11 @@ func codexEnv() []string {
 	return out
 }
 
+// stdinNotice：即使 stdin 已關閉，0.159.x 仍固定印在 stderr，不是錯誤內容。
+const stdinNotice = "Reading additional input from stdin..."
+
 func classifyRunnerError(stderr string, waitErr error) error {
-	s := strings.TrimSpace(stderr)
+	s := strings.TrimSpace(strings.ReplaceAll(stderr, stdinNotice, ""))
 	if strings.Contains(strings.ToLower(s), "unauthorized") ||
 		strings.Contains(strings.ToLower(s), "not logged in") ||
 		strings.Contains(strings.ToLower(s), "authentication") {

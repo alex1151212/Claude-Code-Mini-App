@@ -2,8 +2,10 @@ package usage
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // QuotaWindow 表示單一用量窗口（5 小時、週、帳單週期等）。
@@ -29,8 +31,6 @@ var (
 	claudeWeeklyRe  = regexp.MustCompile(`(?i)Current week \(all models\):\s*(\d+(?:\.\d+)?)%\s*used\s+[^\r\n]*?resets\s*(.+)`)
 	kiroQuotaCreditsRe = regexp.MustCompile(`Credits\s*\(([\d.]+)\s+of\s+([\d.]+)`)
 	kiroQuotaPercentRe = regexp.MustCompile(`(\d+(?:\.\d+)?)%`)
-	codexSessionPctRe  = regexp.MustCompile(`(?i)(?:5[- ]?hour|session)[^\d%]{0,40}(\d+(?:\.\d+)?)\s*%`)
-	codexWeeklyPctRe   = regexp.MustCompile(`(?i)(?:week(?:ly)?)[^\d%]{0,40}(\d+(?:\.\d+)?)\s*%`)
 )
 
 // FromClaudeUsageText 解析 `claude -p "/usage"` 的純文字輸出。
@@ -166,42 +166,55 @@ func FromKiroUsageText(text string) *QuotaInfo {
 	return out
 }
 
-// FromCodexStatusText 解析 codex exec 回覆中的用量百分比文字。
-func FromCodexStatusText(text string) *QuotaInfo {
-	clean := strings.TrimSpace(text)
-	if clean == "" {
+type codexRateWindow struct {
+	UsedPercent   float64 `json:"used_percent"`
+	WindowMinutes int     `json:"window_minutes"`
+	ResetsAt      int64   `json:"resets_at"` // unix 秒
+}
+
+// FromCodexRolloutLine 解析 codex rollout 檔（~/.codex/sessions/**/rollout-*.jsonl）
+// 中 token_count 事件的 payload.rate_limits；該行無 rate_limits 時回 nil。
+// codex 只在有回合時寫檔，窗口 resets_at 已過代表該窗已重置，視為 0%。
+func FromCodexRolloutLine(line []byte, now time.Time) *QuotaInfo {
+	var rec struct {
+		Payload struct {
+			RateLimits *struct {
+				Primary   *codexRateWindow `json:"primary"`
+				Secondary *codexRateWindow `json:"secondary"`
+				PlanType  string           `json:"plan_type"`
+			} `json:"rate_limits"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(line, &rec) != nil || rec.Payload.RateLimits == nil {
 		return nil
 	}
-	out := &QuotaInfo{Provider: "codex", Source: "codex exec status prompt"}
-	if m := codexSessionPctRe.FindStringSubmatch(clean); len(m) == 2 {
-		out.Windows = append(out.Windows, QuotaWindow{
-			Kind: "session", Label: "5-hour", Percent: floatPtr(parseFloat(m[1])),
-		})
-	}
-	if m := codexWeeklyPctRe.FindStringSubmatch(clean); len(m) == 2 {
-		out.Windows = append(out.Windows, QuotaWindow{
-			Kind: "weekly", Label: "weekly", Percent: floatPtr(parseFloat(m[1])),
-		})
+	rl := rec.Payload.RateLimits
+	out := &QuotaInfo{Provider: "codex", Plan: rl.PlanType, Source: "codex rollout rate_limits"}
+	for _, w := range []*codexRateWindow{rl.Primary, rl.Secondary} {
+		if w == nil {
+			continue
+		}
+		// 依窗口長度分類而非 primary/secondary 位置，避免方案調整窗口時對錯。
+		kind := "session"
+		if w.WindowMinutes >= 7*24*60 {
+			kind = "weekly"
+		}
+		pct := w.UsedPercent
+		qw := QuotaWindow{Kind: kind, Label: fmt.Sprintf("%d min", w.WindowMinutes)}
+		if w.ResetsAt > 0 {
+			reset := time.Unix(w.ResetsAt, 0)
+			if !now.Before(reset) {
+				pct = 0
+			}
+			qw.ResetsAt = reset.Format(time.RFC3339)
+		}
+		qw.Percent = floatPtr(pct)
+		out.Windows = append(out.Windows, qw)
 	}
 	if len(out.Windows) == 0 {
 		return nil
 	}
 	return out
-}
-
-// FromCodexTurnUsage 以 token 統計作為 quota fallback 顯示。
-func FromCodexTurnUsage(inputTokens, outputTokens int64) *QuotaInfo {
-	if inputTokens == 0 && outputTokens == 0 {
-		return nil
-	}
-	return &QuotaInfo{
-		Provider: "codex",
-		Source:   "turn.completed.usage",
-		Windows: []QuotaWindow{{
-			Kind: "tokens", Label: "last turn",
-			Used: floatPtr(float64(inputTokens + outputTokens)),
-		}},
-	}
 }
 
 func floatPtr(f float64) *float64 { return &f }

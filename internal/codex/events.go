@@ -19,8 +19,9 @@ type StreamEvent struct {
 type Item struct {
 	ID     string `json:"id"`
 	Type   string `json:"type"`
-	Text   string `json:"text,omitempty"`
-	Status string `json:"status,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Message string `json:"message,omitempty"` // item.type=error（非致命警告）
+	Status  string `json:"status,omitempty"`
 }
 
 // TurnUsage 來自 turn.completed.usage。
@@ -73,16 +74,37 @@ func ErrorMessage(e *StreamEvent) string {
 		return "codex error"
 	}
 	if e.Message != "" {
-		return e.Message
+		return unwrapAPIError(e.Message)
 	}
 	if len(e.Error) > 0 {
 		var obj struct {
 			Message string `json:"message"`
 		}
 		if json.Unmarshal(e.Error, &obj) == nil && obj.Message != "" {
-			return obj.Message
+			return unwrapAPIError(obj.Message)
 		}
 		return string(e.Error)
 	}
 	return "codex turn failed"
+}
+
+// unwrapAPIError：0.159.x 的 message 常是整包 API 錯誤 JSON 字串
+// （{"type":"error","status":400,"error":{"message":"..."}}），取內層 message。
+func unwrapAPIError(s string) string {
+	var obj struct {
+		Message string `json:"message"`
+		Error   *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(s), &obj) != nil {
+		return s
+	}
+	if obj.Error != nil && obj.Error.Message != "" {
+		return obj.Error.Message
+	}
+	if obj.Message != "" {
+		return obj.Message
+	}
+	return s
 }

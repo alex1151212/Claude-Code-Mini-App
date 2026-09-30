@@ -1,6 +1,6 @@
 # 功能計畫書：Codex Runner 全面改接 ACP
 
-> 狀態：待評估／待執行
+> 狀態：**暫緩**（2026-09-30 決議先修 headless CLI，見 `docs/plan/done/codex-cli-refresh.md`；僅在需要 Codex 中途授權時再評估）
 > 建立日期：2026-09-30
 > 關聯規格：`docs/spec/codex-cli.md`（現況，待改寫）、`internal/kiroacp/`（現有 ACP 實作範本）
 

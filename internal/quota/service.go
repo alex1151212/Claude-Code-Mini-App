@@ -101,7 +101,7 @@ func (s *Service) GetAll() map[string]Snapshot {
 	out := map[string]Snapshot{
 		agent.TypeAntigravity: s.antigravitySnapshot(),
 	}
-	for _, p := range []string{agent.TypeClaude, agent.TypeCursor, agent.TypeKiro, agent.TypeKiroACP} {
+	for _, p := range []string{agent.TypeClaude, agent.TypeCursor, agent.TypeKiro, agent.TypeKiroACP, agent.TypeCodex} {
 		out[p] = s.Get(p)
 	}
 	return out
@@ -109,7 +109,7 @@ func (s *Service) GetAll() map[string]Snapshot {
 
 // Warmup 冷啟動時背景 prefetch（各 provider 一次）。
 func (s *Service) Warmup(ctx context.Context) {
-	for _, p := range []string{agent.TypeClaude, agent.TypeCursor, agent.TypeKiro, agent.TypeKiroACP} {
+	for _, p := range []string{agent.TypeClaude, agent.TypeCursor, agent.TypeKiro, agent.TypeKiroACP, agent.TypeCodex} {
 		provider := p
 		go func() {
 			if _, err := s.refresh(ctx, provider, false); err != nil {

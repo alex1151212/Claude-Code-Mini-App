@@ -50,20 +50,16 @@ func TestFormatKiroDisplay(t *testing.T) {
 }
 
 func TestFormatCodexDisplay(t *testing.T) {
-	info := usage.FromCodexStatusText("5-hour: 16% used\nWeekly: 9% used")
+	now := time.Unix(1790700000, 0)
+	info := usage.FromCodexRolloutLine([]byte(sampleCodexRolloutLine), now)
 	got := FormatDisplay("codex", info)
-	if got != "5h 16% · Week 9%" {
+	if got != "5h 2% · Week 13%" {
 		t.Fatalf("got %q", got)
 	}
 }
 
-func TestFormatCodexDisplayTokensFallback(t *testing.T) {
-	info := usage.FromCodexTurnUsage(8000, 120)
-	got := FormatDisplay("codex", info)
-	if got != "Tokens 8120" {
-		t.Fatalf("got %q", got)
-	}
-}
+// codex-cli 0.159.2 實測 rollout token_count 行（週用量改為 13 以驗證非零）。
+const sampleCodexRolloutLine = `{"timestamp":"2026-09-30T06:44:51.387Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":38134}},"rate_limits":{"limit_id":"codex","primary":{"used_percent":2.0,"window_minutes":300,"resets_at":1790767809},"secondary":{"used_percent":13,"window_minutes":10080,"resets_at":1791354609},"credits":{"has_credits":false},"plan_type":"plus"}}}`
 
 func TestServiceGetAntigravity(t *testing.T) {
 	s := NewService()
