@@ -362,11 +362,9 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
 
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
-  // 📎 上傳：存進 work_dir 後把絕對路徑插到輸入框開頭，agent 以路徑讀檔（各家 CLI 通用）。
-  const handleFilesPicked = async (e) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
-    if (!files.length) return;
+  // 上傳：存進 work_dir 後把絕對路徑插到輸入框開頭，agent 以路徑讀檔（各家 CLI 通用）。迴紋針與貼上共用。
+  const uploadFiles = async (files) => {
+    if (!files.length || uploading) return;
     setUploading(true);
     const lines = [];
     try {
@@ -393,6 +391,23 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       return next;
     });
     focusChatInput();
+  };
+  const handleFilesPicked = (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    uploadFiles(files);
+  };
+  // 貼上剪貼簿的截圖／檔案；純文字貼上不攔。截圖常沒有副檔名（後端依副檔名比白名單），依 MIME 補上。
+  const handlePaste = (e) => {
+    if (inputMode === 'shell') return;
+    const files = Array.from(e.clipboardData?.files || []);
+    if (!files.length) return;
+    e.preventDefault();
+    uploadFiles(files.map((f) => {
+      if (/\.[a-z0-9]+$/i.test(f.name)) return f;
+      const ext = (f.type.split('/')[1] || '').replace('jpeg', 'jpg').replace('plain', 'txt');
+      return new File([f], `paste.${ext}`, { type: f.type });
+    }));
   };
 
   const handleInputModeChange = (newMode) => {
@@ -737,8 +752,16 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                     disabled={uploading || isDisabled}
                     aria-label="附加圖片或檔案"
                     title="附加圖片或檔案（上限 8 MB）"
-                    className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] text-[oklch(0.75_0.01_264)] hover:bg-[oklch(0.22_0.02_264)] disabled:opacity-40 text-sm">
-                    {uploading ? '…' : '📎'}
+                    className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] text-[oklch(0.75_0.01_264)] hover:bg-[oklch(0.22_0.02_264)] hover:text-violet-300 disabled:opacity-40 transition-colors">
+                    {uploading ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4 h-4 animate-spin" aria-hidden="true">
+                        <path d="M21 12a9 9 0 1 1-6.22-8.56" />
+                      </svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true">
+                        <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                      </svg>
+                    )}
                   </button>
                 </>
               )}
@@ -763,6 +786,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   }}
                   onSelect={(e) => syncComposerMenus(e.target.value, e.target.selectionStart, inputMode)}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   disabled={isDisabled}
                   placeholder={inputMode === 'shell' ? `輸入 ${shellType || 'Shell'} 指令…` : canQueue ? '執行中…送出會排入佇列' : '輸入指令… @ 標記 session'}
                   rows={1}
