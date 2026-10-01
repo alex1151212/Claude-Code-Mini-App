@@ -30,6 +30,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const [forwardModal, setForwardModal] = useState(null);
   const [forwardHints, setForwardHints] = useState({});
+  // 長按選單的狀態放在 MessageActionsHost，這裡只拿開啟函式，避免長按時整串訊息重繪。
+  const openMsgSheetRef = useRef(null);
+  const handleLongPress = useCallback((payload) => {
+    if (openMsgSheetRef.current) openMsgSheetRef.current(payload);
+  }, []);
+  const bindLongPress = useLongPress(handleLongPress);
   const [slashMenuItems, setSlashMenuItems] = useState([]);
   const [slashActiveIdx, setSlashActiveIdx] = useState(0);
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -238,6 +244,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     setMentionChips((prev) => prev.filter((s) => s.id !== id));
   };
 
+  // ── 訊息長按選單的動作（開關與複製由 MessageActionsHost 處理） ──
+  const handleSheetForward = (p) => {
+    setForwardModal({ messageKey: p.messageKey, messageContent: p.text });
+  };
   const handleSend = (overrideText) => {
     const raw = overrideText !== undefined && overrideText !== null ? String(overrideText) : input;
     const trimmed = raw.trim();
@@ -520,12 +530,23 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
             m.role === 'claude' &&
             i === messages.length - 1;
           const timeLabel = formatMessageTime(m.createdAt);
+          // 長按選單的文字；思考中（thinking）或尚無內容的訊息不啟用。
+          const lpText = m.thinking ? '' : String(forwardBody || '').trim();
           return (
           <div
             key={m.id != null ? `m-${m.id}` : i}
             className={`flex w-full min-w-0 ${m.role === 'user' ? 'justify-end' : 'justify-start'} ${m.role === 'claude' || m.role === 'shell' ? 'group' : ''}`}
           >
-            <div className={`flex flex-col min-w-0 ${m.role === 'user' ? 'items-end max-w-[60%]' : m.role === 'shell' ? 'items-start max-w-[85%]' : 'items-start max-w-[78%]'}`}>
+            <div
+              className={`flex flex-col min-w-0 ${lpText ? 'msg-lp' : ''} ${m.role === 'user' ? 'items-end max-w-[60%]' : m.role === 'shell' ? 'items-start max-w-[85%]' : 'items-start max-w-[78%]'}`}
+              {...(lpText ? bindLongPress({
+                text: lpText,
+                role: m.role,
+                canForward: canForwardShellOrAgent,
+                messageKey: msgKey,
+                createdAt: m.createdAt,
+              }) : {})}
+            >
             {m.role === 'user' ? (
               <div className="bubble-user text-white px-4 py-3 text-sm w-fit max-w-full min-w-0">
                 <div className="whitespace-pre-wrap break-words leading-relaxed">{m.content}</div>
@@ -735,7 +756,6 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 value={inputMode}
                 onChange={handleInputModeChange}
                 disabled={modeSwitchDisabled}
-                showLabel
                 agentLabel={AGENT_LABEL[agentType] || 'Claude'}
               />
               {inputMode !== 'shell' && (
@@ -765,7 +785,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   </button>
                 </>
               )}
-              <div className="relative flex flex-1 min-w-0 items-end" ref={slashInputWrapRef}>
+              <div className="relative flex w-full min-w-0 order-first items-end" ref={slashInputWrapRef}>
                 {slashMenuOpen && (
                   <SlashCommandMenu
                     items={slashMenuItems}
@@ -796,6 +816,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   ].join(' ')}
                 />
               </div>
+              {/* 把中斷／送出推到按鈕列右側 */}
+              <div className="flex-1" aria-hidden="true" />
               {agentRunning && (
                 <button type="button" onClick={handleInterrupt}
                   aria-label="中斷"
@@ -831,6 +853,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
           }));
           if (jump) jumpToSession(targetSession);
         }}
+      />
+
+      <MessageActionsHost
+        openRef={openMsgSheetRef}
+        onForward={handleSheetForward}
       />
 
       {lightboxSrc && (

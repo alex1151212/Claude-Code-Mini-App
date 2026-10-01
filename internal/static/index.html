@@ -71,6 +71,18 @@
     .code-copy-btn:hover { background: oklch(0.3 0.02 264); color: oklch(0.92 0.01 264); }
     .code-copy-btn.copied { opacity: 1; color: oklch(0.75 0.15 145); }
     @media (hover: none) { .code-copy-btn { opacity: 1; } }
+    /* 觸控裝置：訊息交給長按選單，關掉原生 callout 與選字避免兩者打架 */
+    @media (hover: none) and (pointer: coarse) {
+      .msg-lp {
+        -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        transition: transform 0.12s ease-out, opacity 0.12s ease-out;
+      }
+      /* 按住一小段時間後給回饋，讓人知道長按有被偵測到 */
+      .msg-lp.msg-pressing { transform: scale(0.985); opacity: 0.8; }
+    }
+    @keyframes msg-pop-in { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    .msg-pop { animation: msg-pop-in 0.14s ease-out; }
     .prose code:not(pre code) {
       font-family: 'JetBrains Mono', ui-monospace, monospace;
       background: transparent; padding: 0; border-radius: 0; font-size: 0.92em;
@@ -112,8 +124,10 @@
     }
     .ra-cmd-bar {
       display: flex;
-      align-items: flex-end;
-      gap: 10px;
+      /* 輸入框獨佔第一行（JSX 以 order-first + w-full 排在最前），按鈕列換到第二行 */
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
       background: oklch(0.19 0.02 264);
       border: 1px solid oklch(0.3 0.02 264);
       border-radius: 14px;
@@ -220,6 +234,7 @@
 <script type="text/babel" data-presets="react-classic" src="./js/session/NewSessionComposer.js"></script>
 <script type="text/babel" data-presets="react-classic" src="./js/chat/chat-header.js"></script>
 <script type="text/babel" data-presets="react-classic" src="./js/chat/MentionMenu.js"></script>
+<script type="text/babel" data-presets="react-classic" src="./js/chat/MessageActions.js"></script>
 <script type="text/babel" data-presets="react-classic" src="./js/chat/ChatView.js"></script>
 <script type="text/babel" data-presets="react-classic" src="./js/app.js"></script>
 

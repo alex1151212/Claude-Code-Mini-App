@@ -820,7 +820,7 @@ function ModeToggleBtn({ value, onChange, disabled, showLabel = false, agentLabe
       type="button"
       onClick={() => onChange(isShell ? 'agent' : 'shell')}
       disabled={disabled}
-      title={isShell ? '切換到 AI 代理模式' : '切換到 Shell 模式'}
+      title={isShell ? '切換到 AI 代理模式' : `${agentLabel}（點擊切換到 Shell 模式）`}
       aria-label={isShell ? 'Shell 模式，點擊切換至 AI 代理' : 'AI 代理模式，點擊切換至 Shell'}
       className={'ra-cmd-badge' + (isShell ? ' shell' : '') + (disabled ? ' opacity-40 pointer-events-none' : '')}
     >
@@ -864,8 +864,11 @@ function copyTextExecCommand(text) {
     ta.style.left = '-9999px';
     ta.style.top = '0';
     document.body.appendChild(ta);
+    // 16px 避免 iOS 聚焦時自動放大；iOS 的 select() 對 textarea 不一定生效，需再補 setSelectionRange。
+    ta.style.fontSize = '16px';
     ta.focus();
     ta.select();
+    ta.setSelectionRange(0, t.length);
     return document.execCommand('copy');
   } catch (e) {
     return false;
@@ -874,16 +877,76 @@ function copyTextExecCommand(text) {
   }
 }
 
+/**
+ * 複製純文字：安全環境（HTTPS／Telegram）優先用 Clipboard API，失敗再退回 execCommand。
+ * 回傳 Promise<boolean>。
+ */
+async function copyText(text) {
+  const t = text == null ? '' : String(text);
+  if (!t) return false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(t);
+      return true;
+    } catch (_) { /* 權限被拒或失去手勢，改走 fallback */ }
+  }
+  return copyTextExecCommand(t);
+}
+
+/** 輕量 Toast（不需 Provider）：畫面下方浮出一行字，約 1.6 秒後淡出。 */
+function showToast(message, { error = false } = {}) {
+  const el = document.createElement('div');
+  el.setAttribute('role', 'status');
+  el.textContent = message;
+  Object.assign(el.style, {
+    position: 'fixed',
+    left: '50%',
+    bottom: 'calc(88px + env(safe-area-inset-bottom))',
+    transform: 'translateX(-50%)',
+    zIndex: '300',
+    maxWidth: '80vw',
+    padding: '8px 14px',
+    borderRadius: '999px',
+    fontSize: '13px',
+    lineHeight: '1.3',
+    color: error ? 'oklch(0.9 0.08 25)' : 'oklch(0.95 0.01 264)',
+    background: error ? 'oklch(0.3 0.1 25 / 0.95)' : 'oklch(0.28 0.02 264 / 0.95)',
+    border: '1px solid oklch(0.38 0.02 264)',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+    pointerEvents: 'none',
+    opacity: '0',
+    transition: 'opacity 0.18s',
+  });
+  document.body.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  setTimeout(() => {
+    el.style.opacity = '0';
+    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+  }, 1600);
+}
+
+/** 觸覺回饋：Telegram 內用原生 Haptic，其餘退回 vibrate（iOS Safari 不支援則無動作）。 */
+function hapticTap() {
+  try {
+    const h = window.Telegram?.WebApp?.HapticFeedback;
+    if (h && typeof h.impactOccurred === 'function') { h.impactOccurred('medium'); return; }
+    if (navigator.vibrate) navigator.vibrate(15);
+  } catch (_) { /* 無觸覺裝置，忽略 */ }
+}
+
 /** 訊息氣泡用複製按鈕（複製 m.content 原始文字） */
 function MessageCopyButton({ text, className }) {
   const [copied, setCopied] = useState(false);
   const empty = !String(text || '').trim();
-  const onClick = (e) => {
+  const onClick = async (e) => {
     e.stopPropagation();
     if (empty) return;
-    if (copyTextExecCommand(text)) {
+    if (await copyText(text)) {
       setCopied(true);
+      showToast('已複製');
       setTimeout(() => setCopied(false), 2000);
+    } else {
+      showToast('複製失敗', { error: true });
     }
   };
   return (
@@ -893,7 +956,7 @@ function MessageCopyButton({ text, className }) {
       disabled={empty}
       title={copied ? '已複製' : '複製'}
       aria-label={copied ? '已複製到剪貼簿' : '複製訊息'}
-      className={className}
+      className={`${className || ''} inline-flex items-center justify-center min-w-[32px] min-h-[32px]`}
     >
       {copied ? (
         <span className="text-[10px] font-medium leading-none">已複製</span>

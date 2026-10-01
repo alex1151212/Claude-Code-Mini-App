@@ -18,15 +18,16 @@
 | # | 檔案 | 內容 |
 |---|------|------|
 | 1 | `js/core/core.js` | 第一行 `const { useState, ... } = React;`（全域 hook 別名，所有元件都靠這行）。Telegram WebApp 初始化、localStorage 偏好、API base 推算（`resolveApiUrl`）、session 過期/401 處理、`wsURL`、`parseMarkdown`、基礎 hooks（`useMediaQuery`/`useChatHeaderCollapsed`）、label 工具。 |
-| 2 | `js/ui/ui-atoms.js` | 小型展示元件與相鄰工具：`SessionStateChip`、各種 Badge/Chip、`PermMode`/`Model`/`Effort` Select、`QuotaBadge`、`ShellOutput`、`InputModeTab`、`ModeToggleBtn`、`MessageCopyButton`、cli-arg 解析、input-mode 儲存等。 |
+| 2 | `js/ui/ui-atoms.js` | 小型展示元件與相鄰工具：`SessionStateChip`、各種 Badge/Chip、`PermMode`/`Model`/`Effort` Select、`QuotaBadge`、`ShellOutput`、`InputModeTab`、`ModeToggleBtn`、`MessageCopyButton`、複製與提示工具（`copyText`、`showToast`、`hapticTap`）、cli-arg 解析、input-mode 儲存等。 |
 | 3 | `js/hooks/useChatSocket.js` | `ChatView` 的 WebSocket 連線/重連、串流解析、訊息與設定狀態，抽出 `{ messages, state, send, flushPendingModes, ... }`。 |
 | 4 | `js/hooks/useNewSessionForm.js` | `SessionView` 建立表單與 `ForwardModal` 新建會話共用的表單狀態＋payload 組裝邏輯。 |
 | 5 | `js/chat/ForwardModal.js` | `ForwardModal` 元件。 |
 | 6 | `js/session/SessionView.js` | `SessionView`（session 列表畫面）。 |
 | 7 | `js/chat/chat-header.js` | `SlashCommandMenu` + `ChatSessionHeader`。 |
 | 8 | `js/chat/MentionMenu.js` | `@mention` 選單、上方 chips、送出時 `[miniapp]` 展開（詢問／討論，不是 Forward）。 |
-| 9 | `js/chat/ChatView.js` | `ChatView`（聊天主畫面，render + 操作 handler；WS 邏輯已移至 `useChatSocket`）。 |
-| 10 | `js/app.js` | `PasswordView`、`DebugBanner`、`App`，以及 `ReactDOM.createRoot(document.getElementById('root')).render(<App />)`。**必須最後載入**。 |
+| 9 | `js/chat/MessageActions.js` | 訊息長按：`useLongPress`、浮動小選單 `MessageContextMenu`（複製／轉發，樣式參考 Claude iOS）、容器 `MessageActionsHost`。觸控裝置上 `.msg-lp` 會關閉原生選字，由此接手。 |
+| 10 | `js/chat/ChatView.js` | `ChatView`（聊天主畫面，render + 操作 handler；WS 邏輯已移至 `useChatSocket`）。 |
+| 11 | `js/app.js` | `PasswordView`、`DebugBanner`、`App`，以及 `ReactDOM.createRoot(document.getElementById('root')).render(<App />)`。**必須最後載入**。 |
 
 後端：`internal/server/server.go` 的 `app.Static("/", "./internal/static")`（Fiber）直接把整個目錄當靜態檔案伺服，**沒有 `go:embed`**。這代表：
 - 新增/修改 `js/*.js` 立刻生效，不用重啟、不用重編譯 Go binary。
