@@ -4,11 +4,14 @@ function QuickSwitcher({ sessions, onSelect }) {
   const [query, setQuery] = useState('');
   const [idx, setIdx] = useState(0);
   const listRef = useRef(null);
+  const prevFocusRef = useRef(null);
 
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'p') {
         e.preventDefault(); // 擋掉瀏覽器列印
+        // 已開著時再按不要覆蓋（此時焦點在搜尋框）
+        if (!document.querySelector('[data-quick-switcher]')) prevFocusRef.current = document.activeElement;
         setQuery('');
         setIdx(0);
         setOpen(true); // 只開不切換（同 VS Code），Esc 才關
@@ -26,23 +29,36 @@ function QuickSwitcher({ sessions, onSelect }) {
 
   if (!open) return null;
 
+  // 關閉時把焦點還回去：選了會話 → 聊天輸入框（選到同一個會話時 ChatView 不會重載，沒人幫忙 focus）；
+  // Esc／點空白 → 回到開啟前的元素。
+  const close = (toInput) => {
+    setOpen(false);
+    const el = toInput ? document.querySelector('[data-chat-input]') : prevFocusRef.current;
+    if (el && el.isConnected && !el.disabled) el.focus({ preventScroll: true });
+  };
+
   const pick = (s) => {
     if (!s) return;
-    setOpen(false);
+    close(true);
     onSelect(s);
   };
 
   const onInputKey = (e) => {
-    if (e.key === 'Escape') setOpen(false);
+    if (e.key === 'Escape') close(false);
     else if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(i + 1, matches.length - 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setIdx((i) => Math.max(i - 1, 0)); }
-    else if (e.key === 'Enter' && !e.nativeEvent.isComposing) pick(matches[idx]); // 輸入法選字的 Enter 不算
+    else if (e.key === 'Enter' && !e.nativeEvent.isComposing) { // 輸入法選字的 Enter 不算
+      // pick 會同步把焦點移到聊天輸入框，不擋掉的話這個 Enter 的預設動作會落在輸入框上變成換行
+      e.preventDefault();
+      pick(matches[idx]);
+    }
   };
 
   return (
     <div
       className="fixed inset-0 z-[110] flex items-start justify-center pt-[15vh] px-4 bg-black/50"
-      onClick={() => setOpen(false)}
+      onClick={() => close(false)}
+      data-quick-switcher
       role="presentation"
     >
       <div

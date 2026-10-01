@@ -163,6 +163,25 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     focusChatInput();
   }, [histLoaded, session.id, focusChatInput]);
 
+  // 切換會話、歷史載入完成：直接跳到最底。平滑捲動在長歷史上會被後續排版（圖片、程式碼上色）撐高而停在半路，
+  // 所以用瞬間跳轉，並在排版穩定後（下一幀、150ms）再補跳一次。
+  useEffect(() => {
+    if (!histLoaded) return;
+    const jump = () => {
+      const el = chatScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      chatNearBottomRef.current = true;
+      setShowJumpLatest(false);
+    };
+    jump();
+    const raf = requestAnimationFrame(jump);
+    const timer = setTimeout(jump, 150);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+    };
+  }, [histLoaded, session.id]);
+
   // 狀態切回可輸入時（例如 THINKING／STREAMING 結束）自動 focus。
   // 只在閒置狀態 focus：執行中輸入框也可用（排隊），若每次狀態變化都 focus，手機鍵盤會反覆彈出。
   useEffect(() => {
@@ -654,24 +673,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
               </div>
             ) : m.role === 'shell' ? (
               <div className="bubble-shell px-4 py-3 text-sm w-fit max-w-full min-w-0">
-                <div className="flex items-start justify-between gap-2 mb-1.5 min-w-0">
+                <div className="flex items-start gap-2 mb-1.5 min-w-0">
                   <span className="inline-flex items-center gap-1 font-mono text-amber-500/80 text-xs">
                     <span>&gt;_</span>
                     <span>{shellType || 'shell'}</span>
                   </span>
-                  <div className="shrink-0 flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    <MessageCopyButton text={forwardBody} className="p-1 rounded-md text-gray-400 hover:text-gray-200" />
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setForwardModal({ messageKey: msgKey, messageContent: forwardBody }); }}
-                      disabled={!canForwardShellOrAgent}
-                      title="轉發到其他會話"
-                      aria-label="轉發到其他會話"
-                      className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
-                    </button>
-                  </div>
                 </div>
                 <ShellOutput content={m.content || ''} exitCode={m.exitCode} streaming={m.streaming} />
                 {forwardHints[msgKey] ? (
@@ -684,25 +690,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
             ) : (
               /* Claude — 設計 1a 文件流：頭像列 + 無邊框正文 */
               <div className="bubble-claude w-fit max-w-full min-w-0 flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className={`inline-flex items-center justify-center w-[22px] h-[22px] rounded-md shrink-0 ${getAgentBadgeClass(agentType)}`} aria-hidden>
                       <AgentBadgeIcon agentType={agentType} />
                     </span>
                     <span className="text-[13px] font-bold text-[oklch(0.85_0.01_264)]">{AGENT_LABEL[agentType] || agentType || 'Claude'}</span>
-                  </div>
-                  <div className="shrink-0 flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    <MessageCopyButton text={forwardBody} className="p-1 rounded-md text-gray-400 hover:text-gray-200" />
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setForwardModal({ messageKey: msgKey, messageContent: forwardBody }); }}
-                      disabled={!canForwardShellOrAgent}
-                      title="轉發到其他會話"
-                      aria-label="轉發到其他會話"
-                      className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
-                    </button>
                   </div>
                 </div>
                 {m.thinking ? (
@@ -734,9 +727,28 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 ) : null}
               </div>
             )}
-            {timeLabel ? (
-              <div className="mt-1 px-0.5 text-[10px] leading-none text-[oklch(0.48_0.01_264)] tabular-nums select-none" title={String(m.createdAt || '')}>
-                {timeLabel}
+            {(timeLabel || m.role === 'claude' || m.role === 'shell') ? (
+              <div className="mt-0.5 -mb-1 flex items-center gap-1 px-0.5">
+                {timeLabel ? (
+                  <span className="text-[10px] leading-none text-[oklch(0.48_0.01_264)] tabular-nums select-none" title={String(m.createdAt || '')}>
+                    {timeLabel}
+                  </span>
+                ) : null}
+                {(m.role === 'claude' || m.role === 'shell') ? (
+                  <div className="flex items-center gap-0.5">
+                    <MessageCopyButton text={forwardBody} className="p-1 rounded-md text-gray-400 hover:text-gray-200" />
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setForwardModal({ messageKey: msgKey, messageContent: forwardBody }); }}
+                      disabled={!canForwardShellOrAgent}
+                      title="轉發到其他會話"
+                      aria-label="轉發到其他會話"
+                      className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             </div>
@@ -910,6 +922,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 )}
                 <textarea
                   ref={chatInputRef}
+                  data-chat-input
                   value={input}
                   onChange={(e) => {
                     const value = e.target.value;
