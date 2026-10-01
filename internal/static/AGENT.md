@@ -28,7 +28,7 @@
 | 9 | `js/chat/ChatView.js` | `ChatView`（聊天主畫面，render + 操作 handler；WS 邏輯已移至 `useChatSocket`）。 |
 | 10 | `js/app.js` | `PasswordView`、`DebugBanner`、`App`，以及 `ReactDOM.createRoot(document.getElementById('root')).render(<App />)`。**必須最後載入**。 |
 
-後端：`cmd/server/main.go:136` 的 `app.Static("/", "./internal/static")`（Fiber）直接把整個目錄當靜態檔案伺服，**沒有 `go:embed`**。這代表：
+後端：`internal/server/server.go` 的 `app.Static("/", "./internal/static")`（Fiber）直接把整個目錄當靜態檔案伺服，**沒有 `go:embed`**。這代表：
 - 新增/修改 `js/*.js` 立刻生效，不用重啟、不用重編譯 Go binary。
 - 只有改 Go 程式碼本身（路由、中介層等）才需要重編譯。
 

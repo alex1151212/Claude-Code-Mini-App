@@ -18,6 +18,18 @@ cp config.example.yaml config.yaml   # set bot_token, whitelist_tg_ids
 ./claude-miniapp                     # → http://localhost:8080
 ```
 
+## Desktop window (Windows)
+
+Same process, plus a window that loads the existing UI. The browser and Telegram Mini App keep using the same port. Closing the window hides it and leaves a tray icon: left-click shows the window, right-click offers Show or Quit. Ctrl+Q quits as well.
+
+Win11 already includes the WebView2 runtime. `go build ./cmd/server` stays pure Go. The desktop build uses Wails v3 (the tray is built in):
+
+```bash
+go build -ldflags "-H windowsgui" -o claude-miniapp-desktop.exe ./cmd/desktop
+```
+
+Put the exe next to `config.yaml` and `internal/static/` (same layout as the server binary). From a repo checkout, `go run ./cmd/desktop` uses the working directory's config. Add `-tags production` to turn off Wails debug logging.
+
 ## Features
 
 - **Multi-agent** — Claude Code, Cursor Agent, Kiro CLI, Kiro ACP (interactive permission prompts over Agent Client Protocol); per session (Gemini / Antigravity paused due to headless limits)

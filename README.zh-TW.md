@@ -18,6 +18,18 @@ cp config.example.yaml config.yaml   # 填 bot_token、whitelist_tg_ids
 ./claude-miniapp                     # → http://localhost:8080
 ```
 
+## 桌面視窗（Windows）
+
+同一個行程多開一個視窗，顯示現有網頁，並繼續聽 port。瀏覽器與 Telegram Mini App 照舊連線。關視窗只會隱藏，系統匣留著：左鍵叫回視窗，右鍵選「開啟視窗」或「結束」。Ctrl+Q 也會結束。
+
+Win11 已內建 WebView2。`go build ./cmd/server` 維持純 Go、不需 CGO。桌面版用 Wails v3（系統匣是框架內建的）：
+
+```bash
+go build -ldflags "-H windowsgui" -o claude-miniapp-desktop.exe ./cmd/desktop
+```
+
+exe 要跟 `config.yaml`、`internal/static/` 放在一起（與伺服器版相同）。在專案根目錄開發時，`go run ./cmd/desktop` 會用目前工作目錄的設定。加 `-tags production` 會關掉 Wails 的 debug log。
+
 ## 功能
 
 - **多代理** — Claude Code、Cursor Agent、Kiro CLI、Kiro ACP（透過 Agent Client Protocol 提供互動式授權提示）；依 Session 選擇（Gemini / Antigravity 因 headless 限制暫停）

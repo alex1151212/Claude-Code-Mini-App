@@ -36,12 +36,13 @@
 - [ ] 結構化輸出驗收迴圈（有迭代上限）— M
 
 ## 需要時再做
+- 桌面視窗殼（Wails，見 `todo/desktop-window.md`）：同一行程多開一個視窗，不取代網頁／Mini App
 - 統一 ACP（見 `todo/codex-acp-migration.md`，暫緩）
 - 歷史訊息全文搜尋（SQLite FTS5）
 - 更多 CLI
 
 ## 明確不做
-原生 App、E2E relay、plugin 系統、內嵌瀏覽器／port 轉發、DAG 編排引擎。
+原生 App、E2E relay、plugin 系統、把外部網站嵌進視窗或 port 轉發、DAG 編排引擎。
 
 ## 依賴
 ```

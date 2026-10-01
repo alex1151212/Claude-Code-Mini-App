@@ -18,6 +18,8 @@
 ---
 
 ## 📈 進階規劃
+- [x] 桌面視窗殼第一版（Wails，見 `docs/plan/todo/desktop-window.md`）
+- [x] 桌面版系統匣：關視窗後從匣裡叫回／結束（見 `docs/plan/todo/desktop-window.md`）
 - [ ] 支援更多 AI 工具 (例如 OpenAI o1, deepseek 等，若有 CLI)
 - [ ] 檔案總管功能 (瀏覽 work_dir 檔案)
 - [ ] 系統資源監控 (CPU/Memory 狀態)
