@@ -294,7 +294,7 @@ function SettingsModal({ open, onClose }) {
       role="presentation"
     >
       <div
-        className={`w-full ${section === 'logs' ? 'max-w-5xl h-[min(85vh,44rem)]' : 'max-w-2xl h-[min(85vh,34rem)]'} flex overflow-hidden rounded-2xl border border-[oklch(0.28_0.02_264)] bg-[oklch(0.15_0.02_264)] shadow-2xl shadow-black/50`}
+        className={`w-full max-w-5xl h-[min(85vh,44rem)] flex overflow-hidden rounded-2xl border border-[oklch(0.28_0.02_264)] bg-[oklch(0.15_0.02_264)] shadow-2xl shadow-black/50`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
