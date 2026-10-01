@@ -158,10 +158,52 @@ function GeneralSection() {
   );
 }
 
+/** 對話文字大小：拖動即時套用並存本機（這個裝置專用），不走下方的「儲存」。 */
+function ChatFontSizeField() {
+  const [fs, setFs] = useState(readChatFontSize);
+  const change = (v) => setFs(setChatFontSize(Number(v)));
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)]">對話文字大小</div>
+        <button
+          type="button"
+          onClick={() => change(CHAT_FS_DEFAULT)}
+          disabled={fs === CHAT_FS_DEFAULT}
+          className="text-[11px] text-violet-400 hover:text-violet-300 disabled:opacity-40 disabled:hover:text-violet-400"
+        >
+          重設
+        </button>
+      </div>
+      <div className="text-[11px] text-[oklch(0.55_0.01_264)] mb-3">
+        即時套用，只影響這個裝置。手機輸入框不會小於 16px。
+      </div>
+      <div className="flex items-center gap-3">
+        <input
+          type="range"
+          min={CHAT_FS_MIN}
+          max={CHAT_FS_MAX}
+          step={1}
+          value={fs}
+          onChange={(e) => change(e.target.value)}
+          aria-label="對話文字大小"
+          className="flex-1 min-w-0 accent-violet-500"
+        />
+        <span className="w-12 shrink-0 text-right text-xs ra-mono text-[oklch(0.8_0.01_264)]">{fs}px</span>
+      </div>
+      <div className="mt-3 rounded-lg border border-[oklch(0.28_0.02_264)] bg-[oklch(0.16_0.02_264)] px-3 py-2 text-[oklch(0.85_0.01_264)]" style={{ fontSize: fs + 'px', lineHeight: 1.8 }}>
+        預覽：這是一段對話文字 The quick brown fox 0123
+      </div>
+    </div>
+  );
+}
+
 function AppearanceSection({ draft, setDraft }) {
   const set = (key) => (val) => setDraft((prev) => ({ ...prev, [key]: val }));
   return (
     <div className="space-y-5">
+      <ChatFontSizeField />
+
       <div>
         <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">Markdown 顏色</div>
         <div className="text-[11px] text-[oklch(0.55_0.01_264)] mb-3">

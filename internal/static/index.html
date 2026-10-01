@@ -40,11 +40,19 @@
       color: var(--ra-text);
       font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
     }
+    /* 對話文字大小（--ra-chat-fs，預設 14px = 原 text-sm）。加 body 前綴是為了贏過執行時才插入的 Tailwind .text-sm。
+       其餘字級按原本 px 與 14px 的比例換算，預設值下畫面不變。 */
+    body .prose, body .bubble-user, body .bubble-shell { font-size: var(--ra-chat-fs, 14px); }
+    body .bubble-shell pre { font-size: calc(var(--ra-chat-fs, 14px) * 0.857143); }
+    body .ra-msg-time { font-size: calc(var(--ra-chat-fs, 14px) * 0.714286); }
+    body textarea[data-chat-input] { font-size: calc(var(--ra-chat-fs, 14px) * 0.964286); }
     .ra-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     .ra-display { font-family: 'Manrope', sans-serif; font-weight: 800; letter-spacing: -0.02em; }
     .h-app { height: var(--tg-viewport-height, 100svh); }
     @media (max-width: 767px) {
       input, textarea, select { font-size: 16px !important; }
+      /* 手機輸入框不可小於 16px（iOS 聚焦時會自動放大），調大時才跟著變 */
+      body textarea[data-chat-input] { font-size: max(16px, var(--ra-chat-fs, 14px)) !important; }
     }
     .prose pre {
       position: relative; margin: 0.6em 0; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
@@ -219,6 +227,8 @@
     }
     .ra-card-enter { animation: ra-fade-in 0.35s ease-out both; }
   </style>
+  <!-- 對話文字大小：每個裝置各自的偏好（localStorage），在 React 載入前先套，避免先閃一下預設大小。 -->
+  <script>try{var f=parseInt(localStorage.getItem('cc_chat_fs_v1'),10);if(f>=12&&f<=22)document.documentElement.style.setProperty('--ra-chat-fs',f+'px')}catch(e){}</script>
   <!-- Settings 彈窗的「自訂 CSS」寫入這裡；預設空白，不影響任何樣式。 -->
   <style id="ra-custom-css"></style>
 </head>

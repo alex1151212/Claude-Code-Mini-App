@@ -79,6 +79,33 @@ function saveStoredAppearance(appearance) {
   } catch (_) {}
 }
 
+/** 對話文字大小（px）：每個裝置各自的偏好，只存 localStorage、不進伺服器。 */
+const CHAT_FS_KEY = 'cc_chat_fs_v1';
+const CHAT_FS_DEFAULT = 14;
+const CHAT_FS_MIN = 12;
+const CHAT_FS_MAX = 22;
+
+function readChatFontSize() {
+  try {
+    const n = parseInt(localStorage.getItem(CHAT_FS_KEY), 10);
+    if (n >= CHAT_FS_MIN && n <= CHAT_FS_MAX) return n;
+  } catch (_) {}
+  return CHAT_FS_DEFAULT;
+}
+
+/** 套用並存檔；等於預設值時移除，回到「沒設定過」的狀態。 */
+function setChatFontSize(px) {
+  const n = Math.min(CHAT_FS_MAX, Math.max(CHAT_FS_MIN, Math.round(px)));
+  const root = document.documentElement.style;
+  try {
+    if (n === CHAT_FS_DEFAULT) localStorage.removeItem(CHAT_FS_KEY);
+    else localStorage.setItem(CHAT_FS_KEY, String(n));
+  } catch (_) {}
+  if (n === CHAT_FS_DEFAULT) root.removeProperty('--ra-chat-fs');
+  else root.setProperty('--ra-chat-fs', n + 'px');
+  return n;
+}
+
 /** 把外觀設定套到頁面：CSS 變數 + 自訂 CSS <style> 標籤內容。App mount 時與 Settings 儲存後都要呼叫。 */
 function applyAppearance(appearance) {
   const a = { ...APPEARANCE_DEFAULTS, ...(appearance || {}) };

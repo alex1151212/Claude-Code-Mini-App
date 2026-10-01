@@ -730,7 +730,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
             {(timeLabel || m.role === 'claude' || m.role === 'shell') ? (
               <div className="mt-0.5 -mb-1 flex items-center gap-1 px-0.5">
                 {timeLabel ? (
-                  <span className="text-[10px] leading-none text-[oklch(0.48_0.01_264)] tabular-nums select-none" title={String(m.createdAt || '')}>
+                  <span className="ra-msg-time text-[10px] leading-none text-[oklch(0.48_0.01_264)] tabular-nums select-none" title={String(m.createdAt || '')}>
                     {timeLabel}
                   </span>
                 ) : null}
