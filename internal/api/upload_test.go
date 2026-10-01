@@ -10,11 +10,16 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jerry12122/Claude-Code-Mini-App/internal/media"
 )
 
 func TestUpload(t *testing.T) {
 	database := testDB(t)
 	wd := t.TempDir()
+	ws := t.TempDir()
+	old := media.WorkspaceDir
+	media.WorkspaceDir = ws
+	t.Cleanup(func() { media.WorkspaceDir = old })
 	s, err := database.CreateSession("u", "", wd, "default", "claude", nil, "agent")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +48,7 @@ func TestUpload(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("code=%d out=%v", code, out)
 	}
-	if filepath.Dir(out["path"]) != filepath.Join(wd, ".miniapp", "uploads") {
+	if filepath.Dir(out["path"]) != filepath.Join(ws, "uploads", s.ID) {
 		t.Fatalf("path=%s", out["path"])
 	}
 	if b, _ := os.ReadFile(out["path"]); string(b) != "png-bytes" {

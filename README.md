@@ -73,7 +73,7 @@ Each user message spawns a short-lived subprocess. Details: [`docs/spec/plan.md`
 - Keep real secrets out of git; never use `no_auth` in production.
 - **`shell.enabled`** grants shell access on the host to authenticated users — enable only on trusted networks. Allowlist rules: [`docs/spec/shell-allowlist-schema.md`](docs/spec/shell-allowlist-schema.md).
 - **`mcp_token`** grants full session control (including shell) to any client holding it — treat it like `bot_token` and only expose `/mcp` on trusted networks.
-- **Uploads** (`POST /sessions/:id/uploads`) let any authenticated user write whitelisted files (images, pdf, txt/md/log/json/csv; ≤ 8 MB; server-generated names) into `<work_dir>/.miniapp/uploads/`, independent of `shell.enabled`.
+- **Uploads** (`POST /sessions/:id/uploads`) let any authenticated user write whitelisted files (images, pdf, txt/md/log/json/csv; ≤ 8 MB; server-generated names) into `./workspace/uploads/<session_id>/` beside the runtime (not into your project's `work_dir`), independent of `shell.enabled`.
 
 ## Documentation
 

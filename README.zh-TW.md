@@ -73,7 +73,7 @@ Telegram Mini App / 瀏覽器
 - 勿將含真實憑證的設定提交版本庫；生產環境勿開 `no_auth`。
 - **`shell.enabled`** 會讓已驗證使用者在主機上執行 shell — 僅在可信網路啟用。白名單規則：[`docs/spec/shell-allowlist-schema.md`](docs/spec/shell-allowlist-schema.md)。
 - **`mcp_token`** 持有者可完全操控所有 session（含 shell）— 比照 `bot_token` 等級保管，`/mcp` 僅在可信網路開放。
-- **上傳**（`POST /sessions/:id/uploads`）讓已驗證使用者把白名單檔案（圖片、pdf、txt/md/log/json/csv；≤ 8 MB；檔名由伺服器產生）寫入 `<work_dir>/.miniapp/uploads/`，不受 `shell.enabled` 控制。
+- **上傳**（`POST /sessions/:id/uploads`）讓已驗證使用者把白名單檔案（圖片、pdf、txt/md/log/json/csv；≤ 8 MB；檔名由伺服器產生）寫入 runtime 目錄下的 `./workspace/uploads/<session_id>/`（不寫進專案的 `work_dir`），不受 `shell.enabled` 控制。
 
 ## 文件
 

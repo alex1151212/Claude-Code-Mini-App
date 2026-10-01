@@ -8,7 +8,7 @@ import (
 	"github.com/jerry12122/Claude-Code-Mini-App/internal/media"
 )
 
-// UploadHandler 讓使用者上傳圖片／檔案給 agent：存進 session work_dir，回傳絕對路徑，
+// UploadHandler 讓使用者上傳圖片／檔案給 agent：存進 runtime 的 workspace/uploads/<session_id>/，回傳絕對路徑，
 // 由前端把路徑放進 prompt（各家 CLI 都能用路徑讀檔，不需處理各自的多模態格式）。
 type UploadHandler struct {
 	db *db.DB
@@ -20,9 +20,9 @@ func NewUploadHandler(database *db.DB) *UploadHandler {
 
 // Upload POST /sessions/:id/uploads，multipart 欄位 file。
 func (h *UploadHandler) Upload(c *fiber.Ctx) error {
-	workDir, status, msg := sessionWorkDir(h.db, c.Params("id"))
-	if status != 0 {
-		return jsonErr(c, status, msg)
+	sess, err := h.db.GetSession(c.Params("id"))
+	if err != nil {
+		return jsonErr(c, 404, "session 不存在")
 	}
 	fh, err := c.FormFile("file")
 	if err != nil {
@@ -36,7 +36,7 @@ func (h *UploadHandler) Upload(c *fiber.Ctx) error {
 		return jsonErr(c, 400, "讀取上傳檔失敗")
 	}
 	defer f.Close()
-	path, err := media.SaveUpload(workDir, fh.Filename, f)
+	path, err := media.SaveUpload(sess.ID, fh.Filename, f)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "media:") {
 			return jsonErr(c, 500, "儲存檔案失敗")

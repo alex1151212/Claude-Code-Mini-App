@@ -55,6 +55,9 @@ add_logging.py
 # slog/zap rotate 落地檔
 /logs/
 
+# runtime 工作區（使用者上傳等），不進版控
+/workspace/
+
 # ACP roundtrip 本機產出（含絕對路徑、sessionId、raw tool updates）
 poc/kiro-cli/samples_acp_*.json
 poc/kiro-cli/samples_acp_*.md

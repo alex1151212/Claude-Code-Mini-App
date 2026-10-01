@@ -13,7 +13,7 @@
 - [x] 訊息佇列：執行中送出的訊息排隊、完成後自動續跑、失敗／中斷／拒絕授權暫停（存 DB）
 - [x] MCP envelope hop 計數（預設上限 5，`mcp_max_hops` 可設）
 - [x] MCP `ask_session`：阻塞等回覆 + timeout
-- [x] 上傳圖片／檔案給 agent（存 `<work_dir>/.miniapp/uploads/`，`.miniapp/` 內附 `.gitignore` 避免誤 commit）
+- [x] 上傳圖片／檔案給 agent（存 runtime 目錄的 `workspace/uploads/<session_id>/`，不污染專案 `work_dir`）
 
 ---
 
