@@ -31,6 +31,7 @@ func SysProcAttr() *syscall.SysProcAttr {
 // 使用 taskkill /F /T 確保 .cmd → node.exe 整條 wrapper 鏈都被殺掉。
 func KillTree(pid int) error {
 	cmd := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("taskkill /F /T /PID %d: %w (output: %s)", pid, err, out)
 	}

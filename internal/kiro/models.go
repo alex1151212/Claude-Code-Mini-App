@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os/exec"
 	"time"
+
+	"github.com/jerry12122/Claude-Code-Mini-App/internal/proc"
 )
 
 // ModelEntry 是一個可選模型。
@@ -25,7 +27,9 @@ type listModelsOutput struct {
 func FetchModelOptions(ctx context.Context) ([]ModelEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "kiro-cli", "chat", "--list-models", "--format", "json").Output()
+	cmd := exec.CommandContext(ctx, "kiro-cli", "chat", "--list-models", "--format", "json")
+	cmd.SysProcAttr = proc.SysProcAttr()
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

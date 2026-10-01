@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jerry12122/Claude-Code-Mini-App/internal/db"
+	"github.com/jerry12122/Claude-Code-Mini-App/internal/proc"
 )
 
 // OpenHandler 提供「在伺服器主機開啟 VSCode／檔案總管」，與 shell.enabled 共用同一開關
@@ -57,6 +58,8 @@ func sessionWorkDir(database *db.DB, sessionID string) (string, int, string) {
 }
 
 func startDetached(cmd *exec.Cmd) error {
+	// `code` 在 Windows 是 code.cmd（經 cmd.exe），桌面版無主控台時會彈黑窗。
+	cmd.SysProcAttr = proc.SysProcAttr()
 	if err := cmd.Start(); err != nil {
 		return err
 	}

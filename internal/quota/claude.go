@@ -63,7 +63,9 @@ var (
 
 func claudeUserAgent() string {
 	claudeUAOnce.Do(func() {
-		out, err := exec.Command("claude", "--version").CombinedOutput()
+		cmd := exec.Command("claude", "--version")
+		cmd.SysProcAttr = proc.SysProcAttr()
+		out, err := cmd.CombinedOutput()
 		ver := strings.TrimSpace(string(out))
 		ver = strings.TrimSuffix(ver, "(Claude Code)")
 		ver = strings.TrimSpace(ver)

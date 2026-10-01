@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/jerry12122/Claude-Code-Mini-App/internal/proc"
 )
 
 // ModelEntry 是一個可選模型。
@@ -19,7 +21,9 @@ type ModelEntry struct {
 func FetchModelOptions(ctx context.Context) ([]ModelEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "cursor-agent", "--list-models").Output()
+	cmd := exec.CommandContext(ctx, "cursor-agent", "--list-models")
+	cmd.SysProcAttr = proc.SysProcAttr()
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

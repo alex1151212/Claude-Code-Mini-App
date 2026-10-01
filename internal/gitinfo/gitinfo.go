@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jerry12122/Claude-Code-Mini-App/internal/proc"
 )
 
 const (
@@ -65,7 +67,9 @@ func lookupBranch(abs string) (string, bool) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", abs, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	cmd := exec.CommandContext(ctx, "git", "-C", abs, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.SysProcAttr = proc.SysProcAttr() // 桌面版無主控台，不加會每次彈黑窗
+	out, err := cmd.Output()
 	if err != nil {
 		return "", false
 	}

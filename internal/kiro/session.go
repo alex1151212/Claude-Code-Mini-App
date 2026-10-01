@@ -12,6 +12,8 @@ import (
 
 	// kiroSession 是 --list-sessions 解析出的單一 session 條目。
 	"fmt"
+
+	"github.com/jerry12122/Claude-Code-Mini-App/internal/proc"
 )
 
 type kiroSession struct {
@@ -59,6 +61,7 @@ func listSessions(workDir string) ([]kiroSession, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "kiro-cli", "chat", "--list-sessions")
+	cmd.SysProcAttr = proc.SysProcAttr()
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
