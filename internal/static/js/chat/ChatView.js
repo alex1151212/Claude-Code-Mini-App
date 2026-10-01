@@ -45,6 +45,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const bottomRef = useRef(null);
   const chatScrollRef = useRef(null);
   const chatNearBottomRef = useRef(true);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
   const chatInputRef = useRef(null);
   const slashInputWrapRef = useRef(null);
   const composerWrapRef = useRef(null);
@@ -55,7 +56,13 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     if (!el) return;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     chatNearBottomRef.current = gap < 80;
+    setShowJumpLatest(gap >= 200);
   }, []);
+
+  const jumpToLatest = () => {
+    chatNearBottomRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   /** 進入會話或執行結束後將游標放回輸入框（雙 rAF 以配合 React commit／行動裝置鍵盤） */
   const focusChatInput = useCallback(() => {
@@ -74,7 +81,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
 
   // 捲到底
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // 使用者往上翻舊內容時不強制拉回；自己剛送出的訊息例外
+    const last = messages[messages.length - 1];
+    if (chatNearBottomRef.current || last?.role === 'user') {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
     let id2;
     const id1 = requestAnimationFrame(() => {
       id2 = requestAnimationFrame(() => {
@@ -125,6 +136,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       draft = localStorage.getItem(draftInputStorageKey(session.id)) || '';
     } catch (_) {}
     setInput(draft);
+    chatNearBottomRef.current = true;
+    setShowJumpLatest(false);
     setSlashMenuItems([]);
     setSlashActiveIdx(0);
     setMentionOpen(false);
@@ -289,6 +302,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   };
 
   const handleKeyDown = (e) => {
+    // 中文輸入法選字時的 Enter 是確認候選字，不能當成送出（keyCode 229 為舊版 WebView 的 IME 標記）
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     const slashMenuOpenNow = slashMenuItems.length > 0;
     if (slashMenuOpenNow) {
       if (e.key === 'ArrowDown') {
@@ -339,7 +354,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // 觸控裝置 Enter 換行，用送出鈕送出；桌面 Enter 送出、Shift+Enter 換行
+    if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(hover: none) and (pointer: coarse)').matches) {
       e.preventDefault();
       handleSend();
     }
@@ -509,10 +525,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       />
 
       {/* 訊息列表 */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
       <div
         ref={chatScrollRef}
         onScroll={syncChatNearBottom}
-        className="flex-1 overflow-y-auto app-scroll px-4 py-[18px] sm:px-8 sm:py-7 flex flex-col gap-5"
+        className="flex-1 min-h-0 overflow-y-auto app-scroll px-4 py-[18px] sm:px-8 sm:py-7 flex flex-col gap-5"
       >
         {histLoaded && messages.length === 0 && (
           <div className="text-center text-gray-600 mt-20 text-sm">輸入指令開始對話</div>
@@ -667,23 +684,19 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         {state === 'AWAITING_CONFIRM' && permTools.length > 0 && (
           <div className="rounded-xl border border-yellow-700 bg-yellow-950/40 px-4 py-3 text-sm mr-8">
             <div className="text-yellow-400 font-semibold mb-2">需要授權</div>
-            {permTools.map((t, i) => (
-              <div key={i} className="text-gray-300 text-xs font-mono mb-1">
-                {t.tool_name}
-                {t.tool_input && (
-                  <span className="text-gray-500"> — {JSON.stringify(t.tool_input).slice(0, 80)}</span>
-                )}
-              </div>
-            ))}
+            {permTools.map((t, i) => <PermToolDetail key={i} tool={t} />)}
             <div className="flex gap-2 mt-3">
               <button onClick={handleAllowOnce}
                 className="px-3 py-1.5 bg-yellow-700 hover:bg-yellow-600 text-white rounded-lg text-xs">
                 允許此操作
               </button>
-              <button onClick={() => handlePermModeCommitNow('acceptEdits')}
-                className="px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white rounded-lg text-xs">
-                允許並記住
-              </button>
+              {/* 切到 acceptEdits 只對編輯類工具有效；Bash 等會再被拒一次，所以只在全是編輯工具時顯示 */}
+              {permTools.every((t) => EDIT_TOOL_NAMES.has(t.tool_name)) && (
+                <button onClick={() => handlePermModeCommitNow('acceptEdits')}
+                  className="px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white rounded-lg text-xs">
+                  允許並自動允許編輯
+                </button>
+              )}
               <button onClick={handleDenyOnce}
                 className="px-3 py-1.5 bg-red-900 hover:bg-red-800 text-white rounded-lg text-xs">
                 拒絕
@@ -720,6 +733,21 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         )}
 
         <div ref={bottomRef} />
+      </div>
+      {showJumpLatest && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          aria-label="跳到最新訊息"
+          title="跳到最新訊息"
+          className="absolute bottom-3 right-4 flex h-9 w-9 items-center justify-center rounded-full border border-[oklch(0.34_0.03_264)] bg-[oklch(0.22_0.02_264)] text-[oklch(0.85_0.01_264)] shadow-lg hover:bg-[oklch(0.27_0.03_264)] transition-colors"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true">
+            <path d="M12 5v14" />
+            <path d="m19 12-7 7-7-7" />
+          </svg>
+        </button>
+      )}
       </div>
 
       {/* 輸入區：水平內距略小於訊息列表，讓輸入框可用寬度較大 */}
@@ -863,6 +891,34 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       {lightboxSrc && (
         <ChatImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
+    </div>
+  );
+}
+
+const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+
+/** 授權面板的單一工具：Bash 顯示完整指令，編輯類顯示檔名與內容，其餘退回格式化 JSON。長內容可捲動。 */
+function PermToolDetail({ tool }) {
+  const input = tool.tool_input && typeof tool.tool_input === 'object' ? tool.tool_input : null;
+  const preCls = 'mt-1 max-h-40 overflow-auto app-scroll rounded bg-gray-900/60 px-2.5 py-2 text-xs font-mono text-gray-200 whitespace-pre-wrap break-words';
+  let body = null;
+  if (input && typeof input.command === 'string') {
+    body = <pre className={preCls}>{input.command}</pre>;
+  } else if (input && typeof input.file_path === 'string') {
+    const text = input.new_string ?? input.content ?? '';
+    body = (
+      <>
+        <div className="mt-1 text-xs font-mono text-gray-400 break-all">{input.file_path}</div>
+        {text ? <pre className={preCls}>{String(text)}</pre> : null}
+      </>
+    );
+  } else if (input) {
+    body = <pre className={preCls}>{JSON.stringify(input, null, 2)}</pre>;
+  }
+  return (
+    <div className="mb-2">
+      <div className="text-gray-300 text-xs font-mono font-semibold">{tool.tool_name}</div>
+      {body}
     </div>
   );
 }
