@@ -20,7 +20,7 @@ cp config.example.yaml config.yaml   # set bot_token, whitelist_tg_ids
 
 ## Desktop window (Windows)
 
-Same process, plus a window that loads the existing UI. The browser and Telegram Mini App keep using the same port. Closing the window hides it and leaves a tray icon: left-click shows the window, right-click offers Show or Quit. Ctrl+Q quits as well.
+Same process, plus a window that loads the existing UI. The browser and Telegram Mini App keep using the same port. Closing the window hides it and leaves a tray icon: left-click shows the window, right-click offers Show or Quit. Ctrl+Q quits as well. F5 / Ctrl+R reloads the UI and F12 opens DevTools (a no-op with `-tags production`).
 
 Win11 already includes the WebView2 runtime. `go build ./cmd/server` stays pure Go. The desktop build uses Wails v3 (the tray is built in):
 
@@ -30,6 +30,8 @@ go build -ldflags "-H windowsgui" -o claude-miniapp-desktop.exe ./cmd/desktop
 
 Put the exe next to `config.yaml` and `internal/static/` (same layout as the server binary). From a repo checkout, `go run ./cmd/desktop` uses the working directory's config. Add `-tags production` to turn off Wails debug logging.
 
+Frontend files are served from disk, so editing `internal/static/` only needs a reload (F5), not a rebuild. If a change still doesn't show up, use Settings → General → "Clear cache & reload".
+
 ## Features
 
 - **Multi-agent** — Claude Code, Cursor Agent, Kiro CLI, Kiro ACP (interactive permission prompts over Agent Client Protocol); per session (Gemini / Antigravity paused due to headless limits)
@@ -38,9 +40,12 @@ Put the exe next to `config.yaml` and `internal/static/` (same layout as the ser
 - **Quota badge** — Session header shows usage (e.g. Claude `5h 16% · Week 9%`)
 - **Sessions** — Multiple conversations, each with its own `work_dir` and permission mode
 - **Message queue** — Messages sent while a task is running are queued (persisted in the DB, survives restarts) and run in order; the queue pauses on failure or interrupt, and can be resumed or edited
-- **Attachments** — 📎 upload images / text files into `work_dir` and hand them to the agent by path
-- **Unread tracking** — Sessions with new activity are marked unread in the list; "read all" to clear
-- **Permissions** — Claude denial flow; Kiro ACP mid-turn approval; approve once or switch mode from the UI
+- **Quick switcher** — Ctrl/Cmd+P opens a VS Code-style palette to jump to any session (search by name, directory, or branch)
+- **Attachments** — 📎 upload or paste images / text files; they show as removable chips (with thumbnails) above the input and are handed to the agent by path (stored under `workspace/uploads/`, not your `work_dir`); drag & drop on desktop
+- **Unread tracking** — Sessions with new activity are marked unread in the list; "read all" to clear. The list updates in real time over a `/events` WebSocket (30 s polling as a fallback); the tab title shows the unread count, and a toast appears when another session finishes or needs approval
+- **Message actions** — Long-press a message for a copy / forward menu
+- **Chat UX** — IME-safe Enter, Enter inserts a newline on touch devices, scrolling up isn't yanked back by streaming (with a "jump to latest" button), deleted sessions can be undone for 5 seconds
+- **Permissions** — Claude denial flow shows the full command / file content; Kiro ACP mid-turn approval; approve once, or (for edit tools only) allow and auto-accept edits
 - **Auth** — Telegram `initData` + allowlist; optional web login on private IPs
 - **Optional shell** — Run commands in `work_dir` (off by default); when on, also shows "Open in VS Code" / "Open folder" buttons in the session header (desktop only)
 - **MCP server** — Expose sessions to other agents over Streamable HTTP (`POST /mcp`, off by default): operate sessions, read chat history, and query cross-session activity; `ask_session` asks another session and waits for its answer, with a hop limit (`mcp_max_hops`) to stop agent-to-agent loops
