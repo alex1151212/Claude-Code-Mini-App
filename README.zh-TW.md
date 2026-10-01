@@ -8,7 +8,7 @@
 
 ## 快速開始
 
-**需求：** Go 1.25+、Telegram Bot Token（[@BotFather](https://t.me/BotFather)）、伺服器上已安裝並登入要用的 CLI（`claude`、`cursor agent`、`kiro-cli` 等）。
+**需求：** Go 1.25+、Telegram Bot Token（[@BotFather](https://t.me/BotFather)）、伺服器上已安裝並登入要用的 CLI（`claude`、`cursor agent`、`codex`、`kiro-cli` 等）。
 
 ```bash
 git clone https://github.com/jerry12122/Claude-Code-Mini-App
@@ -34,7 +34,7 @@ exe 要跟 `config.yaml`、`internal/static/` 放在一起（與伺服器版相�
 
 ## 功能
 
-- **多代理** — Claude Code、Cursor Agent、Kiro CLI、Kiro ACP（透過 Agent Client Protocol 提供互動式授權提示）；依 Session 選擇（Gemini / Antigravity 因 headless 限制暫停）
+- **多代理** — Claude Code、Cursor Agent、Codex、Kiro ACP（透過 Agent Client Protocol 提供互動式授權提示）；依 Session 選擇。既有的 Kiro CLI Session 仍可執行，新建請改用 Kiro ACP（Gemini / Antigravity 因 headless 限制暫停）
 - **即時串流** — WebSocket 對話與 Markdown 串流；多分頁同步
 - **程式碼區塊** — 語法高亮 + 語言標籤，一鍵複製
 - **用量徽章** — Session header 顯示帳戶用量（如 Claude `5h 16% · Week 9%`）
@@ -43,7 +43,7 @@ exe 要跟 `config.yaml`、`internal/static/` 放在一起（與伺服器版相�
 - **快速跳轉** — Ctrl/Cmd+P 開啟類 VS Code 的跳轉面板，可依名稱、目錄、分支搜尋並切換 Session
 - **附件上傳** — 📎 上傳或貼上圖片／文字檔，在輸入框上方以可移除的 chip 顯示（圖片有縮圖），以路徑交給 agent 讀取（存於 `workspace/uploads/`，不寫入專案 `work_dir`）；桌面版支援拖放
 - **未讀追蹤** — 列表標示有新動態的 Session，可一鍵「全部標為已讀」。列表透過 `/events` WebSocket 即時更新（輪詢 30 秒作為保底）；分頁標題顯示未讀數，其他 Session 完成或待授權時會跳 toast
-- **訊息操作** — 長按訊息開啟複製／轉發選單
+- **訊息操作** — 複製／轉發按鈕常駐在每則訊息的時間旁；長按訊息開啟浮動選單（複製，非自己的訊息另有轉發）
 - **聊天體驗** — 輸入法選字的 Enter 不會誤送出；觸控裝置 Enter 為換行；往上翻舊訊息時不會被串流拉回底部（附「跳到最新」按鈕）；刪除 Session 後 5 秒內可復原
 - **權限流程** — Claude 遭拒時顯示完整指令／檔案內容；Kiro ACP 支援回合中途授權；可「允許一次」，或（僅限編輯類工具）允許並自動允許編輯
 - **驗證** — Telegram `initData` + 白名單；可選內網密碼登入
@@ -56,7 +56,7 @@ exe 要跟 `config.yaml`、`internal/static/` 放在一起（與伺服器版相�
 |---|---|---|---|
 | 手機體驗 | 差 | 純文字 | Mini App UI + 串流 |
 | Session / 工作目錄 | 手動 | 通常沒有 | 內建、可持久 |
-| 多 CLI | 自己接 | 一 bot 一工具 | Claude / Cursor / Kiro / Kiro ACP |
+| 多 CLI | 自己接 | 一 bot 一工具 | Claude / Cursor / Codex / Kiro ACP |
 | 部署 | SSH 金鑰 | Bot + 自寫邏輯 | 單一二進位 |
 
 ## 架構

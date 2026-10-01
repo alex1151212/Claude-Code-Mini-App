@@ -8,7 +8,7 @@
 
 ## Quick Start
 
-**Requires:** Go 1.25+, Telegram bot token ([@BotFather](https://t.me/BotFather)), and the CLI(s) you use (`claude`, `cursor agent`, `kiro-cli`) installed on the server.
+**Requires:** Go 1.25+, Telegram bot token ([@BotFather](https://t.me/BotFather)), and the CLI(s) you use (`claude`, `cursor agent`, `codex`, `kiro-cli`) installed on the server.
 
 ```bash
 git clone https://github.com/jerry12122/Claude-Code-Mini-App
@@ -34,7 +34,7 @@ Frontend files are served from disk, so editing `internal/static/` only needs a 
 
 ## Features
 
-- **Multi-agent** — Claude Code, Cursor Agent, Kiro CLI, Kiro ACP (interactive permission prompts over Agent Client Protocol); per session (Gemini / Antigravity paused due to headless limits)
+- **Multi-agent** — Claude Code, Cursor Agent, Codex, Kiro ACP (interactive permission prompts over Agent Client Protocol); per session. Existing Kiro CLI sessions keep working, but new ones use Kiro ACP (Gemini / Antigravity paused due to headless limits)
 - **Live streaming** — WebSocket chat with Markdown; multi-tab sync
 - **Code blocks** — syntax highlighting with language tag, one-click copy
 - **Quota badge** — Session header shows usage (e.g. Claude `5h 16% · Week 9%`)
@@ -43,7 +43,7 @@ Frontend files are served from disk, so editing `internal/static/` only needs a 
 - **Quick switcher** — Ctrl/Cmd+P opens a VS Code-style palette to jump to any session (search by name, directory, or branch)
 - **Attachments** — 📎 upload or paste images / text files; they show as removable chips (with thumbnails) above the input and are handed to the agent by path (stored under `workspace/uploads/`, not your `work_dir`); drag & drop on desktop
 - **Unread tracking** — Sessions with new activity are marked unread in the list; "read all" to clear. The list updates in real time over a `/events` WebSocket (30 s polling as a fallback); the tab title shows the unread count, and a toast appears when another session finishes or needs approval
-- **Message actions** — Long-press a message for a copy / forward menu
+- **Message actions** — Copy / forward buttons sit beside each message's timestamp; long-press a message for a floating menu (copy, plus forward on incoming messages)
 - **Chat UX** — IME-safe Enter, Enter inserts a newline on touch devices, scrolling up isn't yanked back by streaming (with a "jump to latest" button), deleted sessions can be undone for 5 seconds
 - **Permissions** — Claude denial flow shows the full command / file content; Kiro ACP mid-turn approval; approve once, or (for edit tools only) allow and auto-accept edits
 - **Auth** — Telegram `initData` + allowlist; optional web login on private IPs
@@ -56,7 +56,7 @@ Frontend files are served from disk, so editing `internal/static/` only needs a 
 |---|---|---|---|
 | Mobile UX | Poor | Text-only | Mini App UI + streaming |
 | Session / `work_dir` | Manual | Usually none | Built-in, persisted |
-| Multi CLI | You wire it | One bot, one tool | Claude / Cursor / Kiro / Kiro ACP |
+| Multi CLI | You wire it | One bot, one tool | Claude / Cursor / Codex / Kiro ACP |
 | Deploy | SSH keys | Bot + custom code | Single binary |
 
 ## Architecture
@@ -86,7 +86,7 @@ Each user message spawns a short-lived subprocess. Details: [`docs/spec/plan.md`
 |---|---|
 | Spec & API / WebSocket | [`docs/spec/plan.md`](docs/spec/plan.md) |
 | Config reference | [`config.example.yaml`](config.example.yaml) |
-| Claude / Cursor / Kiro / Antigravity CLI | [`docs/spec/`](docs/spec/) |
+| Claude / Cursor / Codex / Kiro / Antigravity CLI | [`docs/spec/`](docs/spec/) |
 
 > `poc/` (probe scripts, one-off samples) is local investigation scratch, not tracked in the repo.
 
