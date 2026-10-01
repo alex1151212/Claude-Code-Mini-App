@@ -291,6 +291,7 @@ function App() {
         : renderAuthedLayout()
       }
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {authed && <QuickSwitcher sessions={sidebarSortedSessions} onSelect={selectSession} />}
     </>
   );
 }

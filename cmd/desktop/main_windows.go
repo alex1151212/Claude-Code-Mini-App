@@ -74,6 +74,14 @@ func main() {
 		},
 		KeyBindings: map[string]func(application.Window){
 			"ctrl+q": func(application.Window) { app.Quit() },
+			// DisableMenu 後 WebView2 內建的重整快捷鍵不一定生效；前端改了靠這個重載。
+			"f5":           func(w application.Window) { w.Reload() },
+			"ctrl+r":       func(w application.Window) { w.Reload() },
+			"ctrl+shift+r": func(w application.Window) { w.ForceReload() },
+			// 綁定即視為已處理，順便擋掉列印；再轉給前端 QuickSwitcher 的 keydown 監聽。
+			"ctrl+p": func(w application.Window) {
+				w.ExecJS(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'p',ctrlKey:true,cancelable:true}))`)
+			},
 		},
 	})
 	show = func() {
