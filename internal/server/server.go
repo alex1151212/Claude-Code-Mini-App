@@ -321,6 +321,15 @@ func Start(ctx context.Context) (*Server, error) {
 		return fiber.ErrUpgradeRequired
 	})
 	app.Get("/events", authMiddleware, fiberws.New(ws.NewEventsHandler()))
+	app.Use("/logs/ws", func(c *fiber.Ctx) error {
+		if fiberws.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	})
+	app.Get("/logs/ws", authMiddleware, fiberws.New(ws.NewLogStreamHandler()))
+	app.Get("/logs/level", authMiddleware, api.GetLogLevel)
+	app.Put("/logs/level", authMiddleware, api.PutLogLevel)
 	app.Get("/sessions/:id/ws", authMiddleware, fiberws.New(ws.NewHandler(database, cfg.BotToken, shellOpts, quotaSvc, notifyCfg)))
 
 	if cfg.McpToken != "" {

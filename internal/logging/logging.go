@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"go.uber.org/zap"
 	"go.uber.org/zap/exp/zapslog"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -50,14 +51,29 @@ func Init() func() {
 	writer := zapcore.NewMultiWriteSyncer(
 		zapcore.AddSync(os.Stdout),
 		zapcore.AddSync(rotator),
+		zapcore.AddSync(logRing),
 	)
 
-	core := zapcore.NewCore(encoder, writer, level())
+	core := zapcore.NewCore(encoder, writer, atomicLevel)
 	handler := zapslog.NewHandler(core)
 	slog.SetDefault(slog.New(handler))
 
 	return func() { _ = rotator.Close() }
 }
+
+// atomicLevel 讓日誌頁能在執行期切換 Debug（桌面版從捷徑啟動，很難設 LOG_LEVEL）。
+var atomicLevel = zap.NewAtomicLevelAt(level())
+
+// SetDebug 開關 Debug 日誌；關閉時回到 LOG_LEVEL 指定的基準等級。
+func SetDebug(on bool) {
+	if on {
+		atomicLevel.SetLevel(zapcore.DebugLevel)
+		return
+	}
+	atomicLevel.SetLevel(level())
+}
+
+func DebugEnabled() bool { return atomicLevel.Enabled(zapcore.DebugLevel) }
 
 func level() zapcore.Level {
 	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {

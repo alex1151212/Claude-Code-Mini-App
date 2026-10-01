@@ -8,6 +8,7 @@
 const SETTINGS_SECTIONS = [
   { id: 'general', label: '一般' },
   { id: 'appearance', label: '外觀' },
+  { id: 'logs', label: '日誌' },
 ];
 
 /** 把任意合法 CSS 顏色轉成 <input type="color"> 要的 #rrggbb；解不出就回 fallback。 */
@@ -251,7 +252,7 @@ function SettingsModal({ open, onClose }) {
       role="presentation"
     >
       <div
-        className="w-full max-w-2xl h-[min(85vh,34rem)] flex overflow-hidden rounded-2xl border border-[oklch(0.28_0.02_264)] bg-[oklch(0.15_0.02_264)] shadow-2xl shadow-black/50"
+        className={`w-full ${section === 'logs' ? 'max-w-5xl h-[min(85vh,44rem)]' : 'max-w-2xl h-[min(85vh,34rem)]'} flex overflow-hidden rounded-2xl border border-[oklch(0.28_0.02_264)] bg-[oklch(0.15_0.02_264)] shadow-2xl shadow-black/50`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -282,19 +283,24 @@ function SettingsModal({ open, onClose }) {
 
         {/* 右側內容 */}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex-1 overflow-y-auto app-scroll px-5 py-5">
+          {/* 日誌頁自己管捲動（清單內捲、頂部工具列固定），所以外層不捲 */}
+          <div className={`flex-1 min-h-0 app-scroll px-5 ${section === 'logs' ? 'py-4 overflow-hidden' : 'py-5 overflow-y-auto'}`}>
             {section === 'general' && <GeneralSection />}
             {section === 'appearance' && <AppearanceSection draft={draft} setDraft={setDraft} />}
+            {section === 'logs' && <LogsSection />}
           </div>
           <div className="shrink-0 flex items-center justify-between gap-2 px-5 py-3 border-t border-[oklch(0.26_0.02_264)]">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="text-xs text-[oklch(0.55_0.01_264)] hover:text-[oklch(0.8_0.01_264)] transition-colors"
-            >
-              還原預設
-            </button>
-            <div className="flex items-center gap-2">
+            {/* 還原預設／儲存只對外觀有效，日誌頁不顯示 */}
+            {section !== 'logs' && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="text-xs text-[oklch(0.55_0.01_264)] hover:text-[oklch(0.8_0.01_264)] transition-colors"
+              >
+                還原預設
+              </button>
+            )}
+            <div className="flex items-center gap-2 ml-auto">
               {saveError && <span className="text-xs text-red-400">{saveError}</span>}
               {!saveError && savedFlash && <span className="text-xs text-emerald-400">已儲存</span>}
               <button
@@ -304,14 +310,16 @@ function SettingsModal({ open, onClose }) {
               >
                 關閉
               </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-60 text-white rounded-lg text-xs font-medium transition-colors"
-              >
-                {saving ? '儲存中…' : '儲存'}
-              </button>
+              {section !== 'logs' && (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-60 text-white rounded-lg text-xs font-medium transition-colors"
+                >
+                  {saving ? '儲存中…' : '儲存'}
+                </button>
+              )}
             </div>
           </div>
         </div>
