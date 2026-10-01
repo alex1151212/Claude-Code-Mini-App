@@ -118,7 +118,7 @@ function GeneralSection() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="divide-y divide-[oklch(0.25_0.02_264)] [&>*]:py-6 [&>:first-child]:pt-0 [&>:last-child]:pb-0">
       <div>
         <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">開啟 VSCode</div>
         <label className="flex items-start gap-3 cursor-pointer">
@@ -201,7 +201,7 @@ function ChatFontSizeField() {
 function AppearanceSection({ draft, setDraft }) {
   const set = (key) => (val) => setDraft((prev) => ({ ...prev, [key]: val }));
   return (
-    <div className="space-y-5">
+    <div className="divide-y divide-[oklch(0.25_0.02_264)] [&>*]:py-6 [&>:first-child]:pt-0 [&>:last-child]:pb-0">
       <ChatFontSizeField />
 
       <div>
