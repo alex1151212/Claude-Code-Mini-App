@@ -335,9 +335,9 @@ const apiFetch = async (url, opts = {}) => {
 };
 
 // WebSocket：同源 ws/wss；TMA 用 query initData；Web 用 query token（瀏覽器無法自訂 WS Header）
-const wsURL = (sessionId) => {
+const wsBaseURL = (path) => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  let url = `${proto}://${location.host}${appPath(`/sessions/${sessionId}/ws`)}`;
+  let url = `${proto}://${location.host}${appPath(path)}`;
   const sep = (u) => (u.includes('?') ? '&' : '?');
   if (isTelegram) {
     return `${url}${sep(url)}initData=${encodeURIComponent(initData)}`;
@@ -348,6 +348,9 @@ const wsURL = (sessionId) => {
   } catch (_) {}
   return url;
 };
+const wsURL = (sessionId) => wsBaseURL(`/sessions/${sessionId}/ws`);
+/** 全域事件頻道：session 列表有變動時伺服器會推 sessions_changed */
+const eventsWsURL = () => wsBaseURL('/events');
 
 // marked v5+ 已移除同步 `highlight` option（改走 extension/後處理），此 setOptions 的 highlight
 // 已對新版 CDN marked 無效果；改在 parseMarkdown 輸出後手動跑 hljs（見下方）。

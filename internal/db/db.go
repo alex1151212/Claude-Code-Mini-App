@@ -12,6 +12,8 @@ import (
 
 type DB struct {
 	*sql.DB
+	// OnSessionChange：session 狀態／活動時間變動後呼叫（可為 nil），供上層推播列表更新。
+	OnSessionChange func()
 }
 
 func Open(path string) (*DB, error) {
@@ -22,7 +24,7 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db := &DB{sqldb}
+	db := &DB{DB: sqldb}
 	if err := db.migrate(); err != nil {
 		sqldb.Close()
 		return nil, err

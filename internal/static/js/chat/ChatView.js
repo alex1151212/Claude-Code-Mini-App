@@ -1,3 +1,5 @@
+const EMPTY_SUGGESTIONS = ['看一下目前 git 狀態與最近的變更', '概覽這個專案的結構', '跑測試並整理失敗原因'];
+
 function ChatView({ session, onBack, showBack = true, fullHeight = true, usePermModeDropdown = false, onJumpToSession, allSessions }) {
   const jumpToSession = typeof onJumpToSession === 'function' ? onJumpToSession : () => {};
   const agentType = session.agent_type || 'claude';
@@ -42,6 +44,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const [mentionItems, setMentionItems] = useState([]);
   const [mentionActiveIdx, setMentionActiveIdx] = useState(0);
   const [mentionChips, setMentionChips] = useState([]);
+  // 已上傳、尚未送出的附件：送出時才組成 `[附件] 路徑` 前綴，輸入框保持乾淨
+  const [attachments, setAttachments] = useState([]);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
   const bottomRef = useRef(null);
   const chatScrollRef = useRef(null);
   const chatNearBottomRef = useRef(true);
@@ -144,6 +150,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     setMentionItems([]);
     setMentionActiveIdx(0);
     setMentionChips([]);
+    setAttachments((prev) => {
+      prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+      return [];
+    });
   }, [session.id]);
 
   const prevChatStateRef = useRef(null);
@@ -264,7 +274,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const handleSend = (overrideText) => {
     const raw = overrideText !== undefined && overrideText !== null ? String(overrideText) : input;
     const trimmed = raw.trim();
-    if (!trimmed) return;
+    if (!trimmed && attachments.length === 0) return;
     if (trimmed === '/reset' || trimmed === '/clear') {
       if (state !== 'IDLE' && state !== 'SHELL_IDLE') return;
       if (!flushPendingModes()) return;
@@ -287,12 +297,35 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     if (!idle && !canQueue) return;
     // 排隊時不 flush 模式：set_mode 等會廣播 idle 狀態，執行中送會讓 UI 誤判完成。
     if (idle && !flushPendingModes()) return;
-    const expanded = expandMentionPrompt(trimmed, session, mentionChips);
+    const attachPrefix = attachments.map((a) => `[附件] ${a.path}
+`).join('');
+    const expanded = attachPrefix + expandMentionPrompt(trimmed, session, mentionChips);
     if (!send({ type: 'input', data: expanded })) return;
     clearDraftInputForSession(session.id);
     setInput('');
+    clearAttachments();
     setMentionChips([]);
     closeComposerMenus();
+  };
+
+  const applySuggestion = (text) => {
+    setInput(text);
+    try { localStorage.setItem(draftInputStorageKey(session.id), text); } catch (_) {}
+    focusChatInput();
+  };
+
+  const clearAttachments = () => {
+    setAttachments((prev) => {
+      prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+      return [];
+    });
+  };
+  const removeAttachment = (id) => {
+    setAttachments((prev) => {
+      const hit = prev.find((a) => a.id === id);
+      if (hit && hit.previewUrl) URL.revokeObjectURL(hit.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
   };
 
   const handleSlashSelect = (command) => {
@@ -388,11 +421,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
 
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
-  // 上傳：存進 work_dir 後把絕對路徑插到輸入框開頭，agent 以路徑讀檔（各家 CLI 通用）。迴紋針與貼上共用。
+  // 上傳：存到 runtime workspace，成功後成為輸入框上方的附件 chip；送出時才把絕對路徑組進訊息（各家 CLI 通用）。
+  // 迴紋針、貼上、拖放共用。
   const uploadFiles = async (files) => {
     if (!files.length || uploading) return;
     setUploading(true);
-    const lines = [];
+    const added = [];
     try {
       for (const f of files) {
         const fd = new FormData();
@@ -400,22 +434,23 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         const res = await apiFetch(`/sessions/${session.id}/uploads`, { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          window.alert(`${f.name}：${data.error || '上傳失敗'}`);
+          showToast(`${f.name}：${data.error || '上傳失敗'}`, { error: true, duration: 3000 });
           continue;
         }
-        lines.push(`[附件] ${data.path}`);
+        added.push({
+          id: `${Date.now()}-${added.length}`,
+          name: f.name,
+          path: data.path,
+          previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : '',
+        });
       }
     } catch (_) {
-      window.alert('上傳失敗');
+      showToast('上傳失敗', { error: true });
     } finally {
       setUploading(false);
     }
-    if (!lines.length) return;
-    setInput((prev) => {
-      const next = lines.join('\n') + '\n' + prev;
-      try { localStorage.setItem(draftInputStorageKey(session.id), next); } catch (_) {}
-      return next;
-    });
+    if (!added.length) return;
+    setAttachments((prev) => [...prev, ...added]);
     focusChatInput();
   };
   const handleFilesPicked = (e) => {
@@ -434,6 +469,31 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       const ext = (f.type.split('/')[1] || '').replace('jpeg', 'jpg').replace('plain', 'txt');
       return new File([f], `paste.${ext}`, { type: f.type });
     }));
+  };
+
+  // 桌面拖放檔案：用計數器處理子元素 enter/leave 交錯造成的閃爍
+  const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+  const handleDragEnter = (e) => {
+    if (inputMode === 'shell' || !hasFiles(e)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setDragOver(true);
+  };
+  const handleDragOver = (e) => {
+    if (inputMode === 'shell' || !hasFiles(e)) return;
+    e.preventDefault();
+  };
+  const handleDragLeave = (e) => {
+    if (inputMode === 'shell' || !hasFiles(e)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragOver(false);
+  };
+  const handleDrop = (e) => {
+    if (inputMode === 'shell' || !hasFiles(e)) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setDragOver(false);
+    uploadFiles(Array.from(e.dataTransfer.files || []));
   };
 
   const handleInputModeChange = (newMode) => {
@@ -463,6 +523,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const canQueue = inputMode !== 'shell' && (agentRunning || state === 'AWAITING_CONFIRM');
   const isDisabled = !canQueue && (state === 'THINKING' || state === 'STREAMING' || state === 'AWAITING_CONFIRM' || state === 'SHELL_RUNNING' || state === 'SHELL_AWAITING_APPROVAL' || state === 'SHELL_EXEC' || state === 'AWAITING_SHELL_CONFIRM');
   const modeSwitchDisabled = ['THINKING', 'STREAMING', 'AWAITING_CONFIRM', 'SHELL_RUNNING', 'SHELL_AWAITING_APPROVAL', 'SHELL_EXEC', 'AWAITING_SHELL_CONFIRM'].includes(state);
+  const coarsePointer = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const slashMenuOpen = slashMenuItems.length > 0;
   const composerMenuOpen = slashMenuOpen || mentionOpen;
 
@@ -496,7 +557,13 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   }, [input, state]);
 
   return (
-    <div className={`flex flex-col ${fullHeight ? 'h-app' : 'h-full'}`}>
+    <div
+      className={`flex flex-col ${fullHeight ? 'h-app' : 'h-full'}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <ChatSessionHeader
         session={session}
         showBack={showBack}
@@ -532,7 +599,24 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         className="flex-1 min-h-0 overflow-y-auto app-scroll px-4 py-[18px] sm:px-8 sm:py-7 flex flex-col gap-5"
       >
         {histLoaded && messages.length === 0 && (
-          <div className="text-center text-gray-600 mt-20 text-sm">輸入指令開始對話</div>
+          <div className="mt-16 flex flex-col items-center gap-4 text-center">
+            <div className="text-sm text-[oklch(0.65_0.01_264)]">輸入指令開始對話</div>
+            {session.work_dir ? (
+              <div className="max-w-full truncate ra-mono text-xs text-[oklch(0.5_0.01_264)]" title={session.work_dir}>
+                {workDirGroupShortLabel(session.work_dir)}{session.git_branch ? ` · ${session.git_branch}` : ''}
+              </div>
+            ) : null}
+            {inputMode !== 'shell' && (
+              <div className="flex flex-wrap justify-center gap-2">
+                {EMPTY_SUGGESTIONS.map((t) => (
+                  <button key={t} type="button" onClick={() => applySuggestion(t)}
+                    className="rounded-full border border-[oklch(0.3_0.02_264)] bg-[oklch(0.19_0.02_264)] px-3 py-1.5 text-xs text-[oklch(0.8_0.01_264)] hover:border-violet-500/50 hover:text-violet-300 transition-colors">
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         {messages.map((m, i) => {
           const msgKey = m.id != null ? String(m.id) : `idx-${i}`;
@@ -582,16 +666,17 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                       onClick={(e) => { e.stopPropagation(); setForwardModal({ messageKey: msgKey, messageContent: forwardBody }); }}
                       disabled={!canForwardShellOrAgent}
                       title="轉發到其他會話"
-                      className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
+                      aria-label="轉發到其他會話"
+                      className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
                     >
-                      <span className="text-[10px] font-medium">Forward</span>
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
                     </button>
                   </div>
                 </div>
                 <ShellOutput content={m.content || ''} exitCode={m.exitCode} streaming={m.streaming} />
                 {forwardHints[msgKey] ? (
                   <div className="mt-2 pt-2 border-t border-gray-700/80 text-[11px] text-gray-500">
-                    已 Forward 到「{forwardHints[msgKey].label}」
+                    已轉發到「{forwardHints[msgKey].label}」
                     <button type="button" className="ml-1 text-violet-400 hover:text-violet-300 font-medium" onClick={() => jumpToSession(forwardHints[msgKey].session)}>前往查看 →</button>
                   </div>
                 ) : null}
@@ -613,9 +698,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                       onClick={(e) => { e.stopPropagation(); setForwardModal({ messageKey: msgKey, messageContent: forwardBody }); }}
                       disabled={!canForwardShellOrAgent}
                       title="轉發到其他會話"
-                      className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
+                      aria-label="轉發到其他會話"
+                      className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
                     >
-                      <span className="text-[10px] font-medium">Forward</span>
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
                     </button>
                   </div>
                 </div>
@@ -642,7 +728,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 )}
                 {forwardHints[msgKey] ? (
                   <div className="pt-1 text-[11px] text-[oklch(0.5_0.01_264)]">
-                    已 Forward 到「{forwardHints[msgKey].label}」
+                    已轉發到「{forwardHints[msgKey].label}」
                     <button type="button" className="ml-1 text-violet-400 hover:text-violet-300 font-medium" onClick={() => jumpToSession(forwardHints[msgKey].session)}>前往查看 →</button>
                   </div>
                 ) : null}
@@ -779,7 +865,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 onSelect={handleMentionSelect}
               />
             )}
-            <div className={(inputMode === 'shell' ? 'ra-cmd-bar shell' : 'ra-cmd-bar') + ' w-full'}>
+            <AttachmentChips items={attachments} onRemove={removeAttachment} />
+            <div className={(inputMode === 'shell' ? 'ra-cmd-bar shell' : 'ra-cmd-bar') + ' w-full' + (dragOver ? ' ring-2 ring-violet-500/70' : '')}>
               <ModeToggleBtn
                 value={inputMode}
                 onChange={handleInputModeChange}
@@ -851,14 +938,14 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   aria-label="中斷"
                   title="中斷"
                   className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] bg-red-900/70 hover:bg-red-800 text-red-200 text-sm">
-                  ■
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
                 </button>
               )}
-              <button type="button" onClick={() => handleSend()} disabled={isDisabled || !input.trim()}
+              <button type="button" onClick={() => handleSend()} disabled={isDisabled || (!input.trim() && attachments.length === 0)}
                 aria-label={canQueue ? '排入佇列' : '送出'}
-                title={canQueue ? '排入佇列（Enter）' : '送出（Enter）'}
+                title={(canQueue ? '排入佇列' : '送出') + (coarsePointer ? '' : '（Enter）')}
                 className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] ${inputMode === 'shell' ? 'bg-amber-700 hover:bg-amber-600' : 'bg-[oklch(0.62_0.19_275)] hover:brightness-110'} disabled:opacity-30 text-white transition-colors text-sm`}>
-                ➤
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
               </button>
             </div>
           </div>
@@ -919,6 +1006,31 @@ function PermToolDetail({ tool }) {
     <div className="mb-2">
       <div className="text-gray-300 text-xs font-mono font-semibold">{tool.tool_name}</div>
       {body}
+    </div>
+  );
+}
+
+/** 已上傳、待送出的附件：圖片顯示縮圖，其他檔案顯示檔名；× 移除（只是不帶進這次訊息，不刪伺服器上的檔）。 */
+function AttachmentChips({ items, onRemove }) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return (
+    <div className="mb-2 flex flex-wrap gap-2" aria-label="待送出的附件">
+      {items.map((a) => (
+        <div key={a.id} className="relative flex items-center gap-2 rounded-lg border border-[oklch(0.3_0.02_264)] bg-[oklch(0.19_0.02_264)] p-1 pr-6 max-w-[14rem]" title={a.name}>
+          {a.previewUrl ? (
+            <img src={a.previewUrl} alt="" className="h-10 w-10 shrink-0 rounded-md object-cover" />
+          ) : (
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[oklch(0.24_0.02_264)] text-[10px] font-semibold uppercase text-[oklch(0.7_0.01_264)]">
+              {(a.name.split('.').pop() || 'file').slice(0, 4)}
+            </span>
+          )}
+          <span className="min-w-0 truncate text-xs text-[oklch(0.8_0.01_264)]">{a.name}</span>
+          <button type="button" onClick={() => onRemove(a.id)} aria-label={`移除附件 ${a.name}`}
+            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full text-[oklch(0.6_0.01_264)] hover:bg-[oklch(0.28_0.02_264)] hover:text-red-300">
+            ×
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

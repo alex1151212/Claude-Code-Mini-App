@@ -8,6 +8,26 @@ function SessionView({ onEnter, onSessionsLoaded, onSortedSessionsChange, active
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal]   = useState('');
   const renameInputRef = useRef(null);
+  // 刪除有 5 秒復原窗口：這段期間先從列表隱藏，時間到才真的打 DELETE
+  const pendingDelRef = useRef(new Set());
+  const activeIdRef = useRef(activeSessionId);
+  activeIdRef.current = activeSessionId;
+  const prevStatusRef = useRef(null);
+
+  // 非目前 session 從執行中變成完成／待授權時提示，避免人不在該 session 就錯過
+  const notifyStatusChanges = (list) => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = new Map(list.map((s) => [s.id, String(s.status || '').toLowerCase()]));
+    if (!prev) return;
+    for (const s of list) {
+      if (prev.get(s.id) !== 'running' || s.id === activeIdRef.current) continue;
+      const st = String(s.status || '').toLowerCase();
+      if (st === 'running') continue;
+      const name = s.name || '未命名';
+      showToast(st === 'awaiting_confirm' ? `「${name}」待授權` : `「${name}」已完成`, { duration: 3000 });
+      return;
+    }
+  };
 
   const load = async () => {
     try {
@@ -18,7 +38,8 @@ function SessionView({ onEnter, onSessionsLoaded, onSortedSessionsChange, active
       }
       const data = await res.json();
       if (Array.isArray(data)) {
-        const sorted = sortSessionsByWorkDirThenName(data);
+        const sorted = sortSessionsByWorkDirThenName(data).filter((s) => !pendingDelRef.current.has(s.id));
+        notifyStatusChanges(sorted);
         setSessions(sorted);
         onSessionsLoaded?.(sorted);
       } else {
@@ -31,20 +52,58 @@ function SessionView({ onEnter, onSessionsLoaded, onSortedSessionsChange, active
 
   useEffect(() => { load(); }, []);
 
+  // 即時更新走 /events WS；輪詢只當斷線時的保底，回到分頁時也立即補抓一次。
   useEffect(() => {
-    const id = setInterval(() => { load(); }, 5000);
-    return () => clearInterval(id);
+    let ws = null;
+    let retry = null;
+    let debounce = null;
+    let closed = false;
+    const connect = () => {
+      ws = new WebSocket(eventsWsURL());
+      ws.onmessage = (e) => {
+        try {
+          if (JSON.parse(e.data).type !== 'sessions_changed') return;
+        } catch (_) { return; }
+        clearTimeout(debounce);
+        debounce = setTimeout(load, 150);
+      };
+      ws.onclose = () => { if (!closed) retry = setTimeout(connect, 3000); };
+    };
+    connect();
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    const poll = setInterval(load, 30000);
+    return () => {
+      closed = true;
+      clearTimeout(retry);
+      clearTimeout(debounce);
+      clearInterval(poll);
+      document.removeEventListener('visibilitychange', onVisible);
+      if (ws) ws.close();
+    };
   }, []);
 
   useEffect(() => {
     if (renamingId) renameInputRef.current?.focus();
   }, [renamingId]);
 
-  const del = async (id, e) => {
+  const del = (id, e) => {
     e.stopPropagation();
-    if (!confirm('確定刪除此 Session 及所有對話紀錄？')) return;
-    await apiFetch(`/sessions/${id}`, { method: 'DELETE' });
-    load();
+    const target = sessions.find((x) => x.id === id);
+    pendingDelRef.current.add(id);
+    setSessions((prev) => prev.filter((x) => x.id !== id));
+    const timer = setTimeout(async () => {
+      await apiFetch(`/sessions/${id}`, { method: 'DELETE' });
+      pendingDelRef.current.delete(id);
+      load();
+    }, 5000);
+    showToast(`已刪除「${(target && target.name) || '未命名'}」`, {
+      duration: 5000,
+      action: {
+        label: '復原',
+        onClick: () => { clearTimeout(timer); pendingDelRef.current.delete(id); load(); },
+      },
+    });
   };
 
   const startRename = (s, e) => {
@@ -220,10 +279,17 @@ function SessionView({ onEnter, onSessionsLoaded, onSortedSessionsChange, active
     return active > (Number.isNaN(read) ? 0 : read);
   };
 
-  const hasUnread = useMemo(
-    () => (Array.isArray(sessions) ? sessions : []).some((s) => activeSessionId !== s.id && isUnread(s)),
+  const unreadCount = useMemo(
+    () => (Array.isArray(sessions) ? sessions : []).filter((s) => activeSessionId !== s.id && isUnread(s)).length,
     [sessions, activeSessionId]
   );
+  const hasUnread = unreadCount > 0;
+
+  // 分頁標題顯示未讀數，切到別的分頁／視窗也看得到
+  useEffect(() => {
+    document.title = (unreadCount > 0 ? `(${unreadCount}) ` : '') + 'Claude Code · Remote Agent';
+  }, [unreadCount]);
+  useEffect(() => () => { document.title = 'Claude Code · Remote Agent'; }, []);
 
   const handleReadAll = () => {
     // Optimistic：點了就消掉；背景打 API，不等回應、失敗不回滾，下次 5 秒 poll 覆蓋掉也沒差。

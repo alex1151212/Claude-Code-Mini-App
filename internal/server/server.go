@@ -313,6 +313,14 @@ func Start(ctx context.Context) (*Server, error) {
 		IncludePrompt:    cfg.Notify.IncludePrompt,
 		PromptPreviewLen: cfg.Notify.PromptPreviewLen,
 	}
+	database.OnSessionChange = ws.NotifySessionsChanged
+	app.Use("/events", func(c *fiber.Ctx) error {
+		if fiberws.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	})
+	app.Get("/events", authMiddleware, fiberws.New(ws.NewEventsHandler()))
 	app.Get("/sessions/:id/ws", authMiddleware, fiberws.New(ws.NewHandler(database, cfg.BotToken, shellOpts, quotaSvc, notifyCfg)))
 
 	if cfg.McpToken != "" {

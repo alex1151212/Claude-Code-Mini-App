@@ -222,6 +222,9 @@ func (db *DB) UpdateSessionStatus(id, status string) error {
 		`UPDATE sessions SET status = ?, last_active = datetime('now') WHERE id = ?`,
 		status, id,
 	)
+	if err == nil && db.OnSessionChange != nil {
+		db.OnSessionChange()
+	}
 	return err
 }
 

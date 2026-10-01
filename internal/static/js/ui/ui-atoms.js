@@ -893,11 +893,26 @@ async function copyText(text) {
   return copyTextExecCommand(t);
 }
 
-/** 輕量 Toast（不需 Provider）：畫面下方浮出一行字，約 1.6 秒後淡出。 */
-function showToast(message, { error = false } = {}) {
+/** 輕量 Toast（不需 Provider）：畫面下方浮出一行字，預設約 1.6 秒後淡出。
+ *  action={label,onClick} 會多一顆可點的按鈕（如「復原」），此時 duration 通常要拉長。 */
+function showToast(message, { error = false, action = null, duration = 1600 } = {}) {
   const el = document.createElement('div');
   el.setAttribute('role', 'status');
-  el.textContent = message;
+  const text = document.createElement('span');
+  text.textContent = message;
+  el.appendChild(text);
+  const dismiss = () => {
+    el.style.opacity = '0';
+    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+  };
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = action.label;
+    Object.assign(btn.style, { marginLeft: '12px', fontWeight: '600', color: 'oklch(0.8 0.12 275)', cursor: 'pointer' });
+    btn.onclick = () => { dismiss(); action.onClick(); };
+    el.appendChild(btn);
+  }
   Object.assign(el.style, {
     position: 'fixed',
     left: '50%',
@@ -913,16 +928,13 @@ function showToast(message, { error = false } = {}) {
     background: error ? 'oklch(0.3 0.1 25 / 0.95)' : 'oklch(0.28 0.02 264 / 0.95)',
     border: '1px solid oklch(0.38 0.02 264)',
     boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-    pointerEvents: 'none',
+    pointerEvents: action ? 'auto' : 'none',
     opacity: '0',
     transition: 'opacity 0.18s',
   });
   document.body.appendChild(el);
   requestAnimationFrame(() => { el.style.opacity = '1'; });
-  setTimeout(() => {
-    el.style.opacity = '0';
-    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
-  }, 1600);
+  setTimeout(dismiss, duration);
 }
 
 /** 觸覺回饋：Telegram 內用原生 Haptic，其餘退回 vibrate（iOS Safari 不支援則無動作）。 */

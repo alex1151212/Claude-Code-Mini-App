@@ -52,10 +52,10 @@ function OpenInHostButton({ sessionId, kind }) {
       const res = await apiFetch(`/sessions/${sessionId}/${path}`, { method: 'POST' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        window.alert(data.error || '開啟失敗');
+        showToast(data.error || '開啟失敗', { error: true });
       }
     } catch (_) {
-      window.alert('開啟失敗');
+      showToast('開啟失敗', { error: true });
     } finally {
       setBusy(false);
     }

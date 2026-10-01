@@ -1,6 +1,11 @@
 package ws
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+
+	fiberws "github.com/gofiber/contrib/websocket"
+)
 
 // broadcaster：同一 session 可有多條 WS 同時訂閱，任務事件廣播給全部訂閱者
 type broadcaster struct {
@@ -44,5 +49,32 @@ func (b *broadcaster) Broadcast(sessionID string, msg serverMsg) {
 	b.mu.Unlock()
 	for _, send := range sends {
 		send(msg)
+	}
+}
+
+// eventsKey：全域事件頻道（非特定 session），供側欄即時更新列表。
+const eventsKey = "*"
+
+// NotifySessionsChanged 通知所有 /events 訂閱者重新抓 session 列表。
+func NotifySessionsChanged() {
+	hub.Broadcast(eventsKey, serverMsg{Type: "sessions_changed"})
+}
+
+// NewEventsHandler：只推不收的全域事件 WS；讀迴圈僅用來偵測斷線。
+func NewEventsHandler() func(*fiberws.Conn) {
+	return func(c *fiberws.Conn) {
+		var mu sync.Mutex
+		unsub := hub.Subscribe(eventsKey, func(msg serverMsg) bool {
+			b, _ := json.Marshal(msg)
+			mu.Lock()
+			defer mu.Unlock()
+			return c.WriteMessage(1, b) == nil
+		})
+		defer unsub()
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
 	}
 }
