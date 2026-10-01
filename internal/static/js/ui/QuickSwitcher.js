@@ -11,7 +11,7 @@ function QuickSwitcher({ sessions, onSelect }) {
         e.preventDefault(); // 擋掉瀏覽器列印
         setQuery('');
         setIdx(0);
-        setOpen(true); // 只開不切換：桌面版 Go 層與瀏覽器 keydown 可能各觸發一次，Esc 才關
+        setOpen(true); // 只開不切換（同 VS Code），Esc 才關
       }
     };
     window.addEventListener('keydown', onKey);

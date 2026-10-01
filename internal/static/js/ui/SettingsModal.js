@@ -71,12 +71,13 @@ function ColorField({ label, value, onChange, placeholder }) {
   );
 }
 
-/** 「一般」設定頁：目前僅 vscodeNoAdmin 一個開關，即時 PUT（不走外層儲存流程，跟 appearance 分開存）。 */
+/** 「一般」設定頁：vscodeNoAdmin 開關即時 PUT（不走外層儲存流程，跟 appearance 分開存）；另有純前端的「清除快取並重新載入」。 */
 function GeneralSection() {
   const [general, setGeneral] = useState(() => ({ ...GENERAL_DEFAULTS }));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -105,6 +106,16 @@ function GeneralSection() {
     }
   };
 
+  // 瀏覽器沒有清 HTTP 快取的 API；cache:'reload' 會繞過並覆寫該 URL 的快取，之後 reload 就拿到新檔。
+  const reloadFresh = async () => {
+    setRefreshing(true);
+    const urls = [location.href, ...[...document.querySelectorAll('script[src],link[rel=stylesheet][href]')]
+      .map((el) => el.src || el.href)]
+      .filter((u) => new URL(u, location.href).origin === location.origin);
+    await Promise.all(urls.map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
+    location.reload();
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -127,6 +138,20 @@ function GeneralSection() {
           </div>
         </label>
         {error ? <div className="text-xs text-red-400 mt-2">{error}</div> : null}
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">前端更新</div>
+        <div className="text-[11px] text-[oklch(0.55_0.01_264)] mb-2">
+          改了前端檔案卻沒生效時使用：強制重抓本站所有腳本與樣式（覆寫瀏覽器快取）後重新載入頁面。
+        </div>
+        <button
+          type="button"
+          onClick={reloadFresh}
+          disabled={refreshing}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.24_0.02_264)] hover:bg-[oklch(0.28_0.03_264)] text-[oklch(0.9_0.01_264)] border border-[oklch(0.34_0.03_264)] disabled:opacity-40"
+        >
+          {refreshing ? '更新中…' : '清除快取並重新載入'}
+        </button>
       </div>
     </div>
   );

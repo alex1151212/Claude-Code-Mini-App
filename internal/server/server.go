@@ -115,6 +115,12 @@ func Start(ctx context.Context) (*Server, error) {
 		BodyLimit: 10 * 1024 * 1024,
 	})
 
+	// 沒帶 Cache-Control 時 Chromium 會依 Last-Modified 啟發式快取，改了前端檔案後 F5 仍吃舊的（桌面版又沒有強制重載）。
+	// no-cache = 每次向 server 驗證，沒變動回 304，不是不快取。
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("Cache-Control", "no-cache")
+		return c.Next()
+	})
 	app.Static("/", "./internal/static")
 
 	app.Post("/auth/login", func(c *fiber.Ctx) error {
