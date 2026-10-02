@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	fiberws "github.com/gofiber/contrib/websocket"
@@ -97,7 +98,8 @@ func Start(ctx context.Context) (*Server, error) {
 	if err := database.ResetPendingMessages(); err != nil {
 		slog.Info(fmt.Sprintf("[startup] ResetPendingMessages 失敗: %v", err))
 	}
-	syncModelOptions(database)
+	// 背景執行：各 CLI 抓清單各要 1 秒上下，而且失敗本來就不擋啟動。
+	go syncModelOptions(database)
 
 	for _, id := range cfg.WhitelistTgIDs {
 		if err := database.AddUser(id, ""); err != nil {
@@ -267,6 +269,10 @@ func Start(ctx context.Context) (*Server, error) {
 	app.Delete("/sessions/:id", authMiddleware, sh.Delete)
 	app.Get("/sessions/:id/messages", authMiddleware, sh.Messages)
 	app.Get("/model-options/:agentType", authMiddleware, sh.ModelOptions)
+	// 不必重啟就重新抓各 CLI 的模型清單；會等到抓完才回（數秒），failed 為抓取失敗的 agent_type。
+	app.Post("/model-options/refresh", authMiddleware, func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"failed": syncModelOptions(database)})
+	})
 	app.Get("/work-dirs", authMiddleware, sh.ListWorkDirs)
 
 	sth := api.NewSettingsHandler(database)
@@ -364,26 +370,43 @@ func Start(ctx context.Context) (*Server, error) {
 	return s, nil
 }
 
-// syncModelOptions 啟動時抓各 agent 目前可用的模型清單並同步進 model_options 表。
-// 任一 agent 取得失敗只記 log、不影響其他 agent，也不擋伺服器啟動。
-func syncModelOptions(database *db.DB) {
+// modelSyncMu 讓啟動時的背景同步與使用者手動重新抓取不會同時跑（兩邊都會啟動 CLI、寫同一張表）。
+var modelSyncMu sync.Mutex
+
+// syncModelOptions 抓各 agent 目前可用的模型清單並同步進 model_options 表（啟動時與手動重新抓取共用）。
+// 任一 agent 取得失敗只記 log、不影響其他 agent，也不擋伺服器啟動；回傳失敗的 agent_type。
+func syncModelOptions(database *db.DB) (failed []string) {
+	modelSyncMu.Lock()
+	defer modelSyncMu.Unlock()
+	failed = []string{}
 	apply := func(agentType string, live []db.ModelOption, err error) {
 		if err != nil {
 			slog.Info(fmt.Sprintf("[startup] 取得 %s model 清單失敗，略過: %v", agentType, err))
+			failed = append(failed, agentType)
 			return
 		}
 		if err := database.SyncModelOptions(agentType, live); err != nil {
 			slog.Info(fmt.Sprintf("[startup] SyncModelOptions(%s) 失敗: %v", agentType, err))
+			failed = append(failed, agentType)
 		}
 	}
 
-	claudeOpts := make([]db.ModelOption, 0)
-	for _, e := range claude.ModelOptions() {
+	ctx := context.Background()
+
+	claudeEntries, err := claude.FetchModelOptions(ctx)
+	if err != nil {
+		// 抓不到時不動 DB（同其他 agent），免得暫時性失敗（例如 PATH 找不到 claude）把已抓到的新模型洗掉；
+		// 只有 DB 還沒有任何 Claude 選項（首次安裝）時，才用內建清單當種子。
+		if existing, lerr := database.ListModelOptions(agent.TypeClaude); lerr == nil && len(existing) == 0 {
+			slog.Info(fmt.Sprintf("[startup] 取得 claude model 清單失敗，改用內建清單當種子: %v", err))
+			claudeEntries, err = claude.ModelOptions(), nil
+		}
+	}
+	claudeOpts := make([]db.ModelOption, 0, len(claudeEntries))
+	for _, e := range claudeEntries {
 		claudeOpts = append(claudeOpts, db.ModelOption{ModelID: e.ModelID, Label: e.Label})
 	}
-	apply(agent.TypeClaude, claudeOpts, nil)
-
-	ctx := context.Background()
+	apply(agent.TypeClaude, claudeOpts, err)
 
 	cursorEntries, err := cursor.FetchModelOptions(ctx)
 	cursorOpts := make([]db.ModelOption, 0, len(cursorEntries))
@@ -406,6 +429,7 @@ func syncModelOptions(database *db.DB) {
 	}
 	apply(agent.TypeKiro, kiroOpts, err)
 	apply(agent.TypeKiroACP, kiroOpts, err)
+	return failed
 }
 
 func webSessionToken(c *fiber.Ctx) string {

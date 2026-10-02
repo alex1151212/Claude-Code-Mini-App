@@ -34,7 +34,7 @@ Frontend files are served from disk, so editing `internal/static/` only needs a 
 
 ## Features
 
-- **Multi-agent** — Claude Code, Cursor Agent, Codex, Kiro ACP (interactive permission prompts over Agent Client Protocol); per session. Existing Kiro CLI sessions keep working, but new ones use Kiro ACP (Gemini / Antigravity paused due to headless limits)
+- **Multi-agent** — Claude Code, Cursor Agent, Codex, Kiro ACP (interactive permission prompts over Agent Client Protocol); per session. Existing Kiro CLI sessions keep working, but new ones use Kiro ACP (Gemini / Antigravity paused due to headless limits). Model lists are fetched from each CLI on startup (Claude included) and can be refreshed without a restart from Settings → General
 - **Live streaming** — WebSocket chat with Markdown; multi-tab sync
 - **Code blocks** — syntax highlighting with language tag, one-click copy
 - **Quota badge** — Session header shows usage (e.g. Claude `5h 16% · Week 9%`)

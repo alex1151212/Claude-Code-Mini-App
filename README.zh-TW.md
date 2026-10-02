@@ -34,7 +34,7 @@ exe 要跟 `config.yaml`、`internal/static/` 放在一起（與伺服器版相�
 
 ## 功能
 
-- **多代理** — Claude Code、Cursor Agent、Codex、Kiro ACP（透過 Agent Client Protocol 提供互動式授權提示）；依 Session 選擇。既有的 Kiro CLI Session 仍可執行，新建請改用 Kiro ACP（Gemini / Antigravity 因 headless 限制暫停）
+- **多代理** — Claude Code、Cursor Agent、Codex、Kiro ACP（透過 Agent Client Protocol 提供互動式授權提示）；依 Session 選擇。既有的 Kiro CLI Session 仍可執行，新建請改用 Kiro ACP（Gemini / Antigravity 因 headless 限制暫停）。模型清單於啟動時向各 CLI 取得（含 Claude），也可在 設定 → 一般 不重啟直接重新抓取
 - **即時串流** — WebSocket 對話與 Markdown 串流；多分頁同步
 - **程式碼區塊** — 語法高亮 + 語言標籤，一鍵複製
 - **用量徽章** — Session header 顯示帳戶用量（如 Claude `5h 16% · Week 9%`）

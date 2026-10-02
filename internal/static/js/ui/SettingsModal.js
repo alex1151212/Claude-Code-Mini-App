@@ -79,6 +79,7 @@ function GeneralSection() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -117,6 +118,25 @@ function GeneralSection() {
     location.reload();
   };
 
+  // 伺服器會等各 CLI 都抓完才回（數秒）；failed 是抓取失敗的 agent_type（kiro 與 kiroacp 共用同一次抓取，會一起列）。
+  const refreshModels = async () => {
+    setRefreshingModels(true);
+    try {
+      const res = await apiFetch('/model-options/refresh', { method: 'POST' });
+      if (!res.ok) throw new Error(String(res.status));
+      const { failed = [] } = await res.json();
+      if (failed.length) {
+        showToast(`已更新，但 ${[...new Set(failed)].join('、')} 抓取失敗（見日誌）`, { error: true, duration: 3500 });
+      } else {
+        showToast('模型清單已更新，重新開啟對話即可看到');
+      }
+    } catch (_) {
+      showToast('更新模型清單失敗', { error: true });
+    } finally {
+      setRefreshingModels(false);
+    }
+  };
+
   return (
     <div className="divide-y divide-[oklch(0.25_0.02_264)] [&>*]:py-6 [&>:first-child]:pt-0 [&>:last-child]:pb-0">
       <div>
@@ -139,6 +159,20 @@ function GeneralSection() {
           </div>
         </label>
         {error ? <div className="text-xs text-red-400 mt-2">{error}</div> : null}
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">模型清單</div>
+        <div className="text-[11px] text-[oklch(0.55_0.01_264)] mb-2">
+          程式啟動時會向各 CLI（Claude、Cursor、Codex、Kiro）取得可用模型。有新模型時按這裡即可更新，不必重啟。
+        </div>
+        <button
+          type="button"
+          onClick={refreshModels}
+          disabled={refreshingModels}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[oklch(0.24_0.02_264)] hover:bg-[oklch(0.28_0.03_264)] text-[oklch(0.9_0.01_264)] border border-[oklch(0.34_0.03_264)] disabled:opacity-40"
+        >
+          {refreshingModels ? '更新中…（需數秒）' : '重新抓取模型清單'}
+        </button>
       </div>
       <div>
         <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">前端更新</div>
