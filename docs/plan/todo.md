@@ -5,6 +5,7 @@
 ---
 
 ## 🚀 待執行項目
+- [x] 附件輸入與聊天呈現：輸入框內佔位／重試、訊息附件卡片、驗證預覽與歷史持久化；實機驗證待補（見 [計劃](todo/attachment-experience.md)）
 - [ ] 手機實機驗證：TG WebView（iOS／Android）📎 檔案選擇器、佇列 UI
 - [ ] 驗證 Codex／Cursor／Kiro 能以絕對路徑讀取上傳的圖片（Claude 的 Read 工具可讀圖）
 - [ ] （另案）`internal/static/uploads` 掛在未驗證的 `app.Static` 下，agent 截圖知道 URL 即可讀

@@ -66,12 +66,13 @@ func buildSyncPayload(database *db.DB, sessionID string) (SyncPayload, error) {
 	}
 	uiState := computeWSState(sess, msgs)
 	type row struct {
-		ID         int64  `json:"id"`
-		Role       string `json:"role"`
-		Content    string `json:"content"`
-		ResultText string `json:"result_text,omitempty"`
-		Status     string `json:"status"`
-		CreatedAt  string `json:"created_at,omitempty"`
+		ID          int64           `json:"id"`
+		Role        string          `json:"role"`
+		Content     string          `json:"content"`
+		ResultText  string          `json:"result_text,omitempty"`
+		Status      string          `json:"status"`
+		CreatedAt   string          `json:"created_at,omitempty"`
+		Attachments []db.Attachment `json:"attachments,omitempty"`
 	}
 	out := make([]row, 0, len(msgs))
 	for _, m := range msgs {
@@ -81,7 +82,7 @@ func buildSyncPayload(database *db.DB, sessionID string) (SyncPayload, error) {
 		}
 		out = append(out, row{
 			ID: m.ID, Role: m.Role, Content: m.Content, ResultText: m.ResultText,
-			Status: st, CreatedAt: m.CreatedAt,
+			Status: st, CreatedAt: m.CreatedAt, Attachments: m.Attachments,
 		})
 	}
 	raw, err := json.Marshal(out)

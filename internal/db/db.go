@@ -85,6 +85,16 @@ func (db *DB) migrate() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
 		CREATE INDEX IF NOT EXISTS idx_queued_messages_session ON queued_messages (session_id, id);
+		CREATE TABLE IF NOT EXISTS attachments (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			original_name TEXT NOT NULL,
+			storage_name TEXT NOT NULL,
+			mime_type TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments (session_id);
 	`)
 	if err != nil {
 		return err
@@ -119,6 +129,12 @@ func (db *DB) migrate() error {
 	// 新增 shell_pending 欄位（已存在時忽略）
 	tryAlter(`ALTER TABLE sessions ADD COLUMN shell_pending TEXT NOT NULL DEFAULT ''`)
 	tryAlter(`ALTER TABLE messages ADD COLUMN result_text TEXT NOT NULL DEFAULT ''`)
+	// Attachment migrations are required: fail startup rather than silently lose metadata.
+	for _, table := range []string{"messages", "queued_messages"} {
+		if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]'`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
 	tryAlter(`ALTER TABLE sessions ADD COLUMN active_model TEXT NOT NULL DEFAULT ''`)
 	tryAlter(`ALTER TABLE sessions ADD COLUMN active_model_source TEXT NOT NULL DEFAULT ''`)
 	tryAlter(`ALTER TABLE sessions ADD COLUMN active_model_at TEXT NOT NULL DEFAULT ''`)

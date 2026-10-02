@@ -68,16 +68,21 @@ const (
 )
 
 type clientMsg struct {
-	Type   string   `json:"type"`
-	Data   string   `json:"data,omitempty"`
-	Tools  []string `json:"tools,omitempty"`
-	Mode   string   `json:"mode,omitempty"`
-	Model  string   `json:"model,omitempty"`
-	Effort string   `json:"effort,omitempty"`
-	ID     int64    `json:"id,omitempty"` // queue_remove 的目標
+	RequestID     string   `json:"request_id,omitempty"`
+	AttachmentIDs []string `json:"attachment_ids,omitempty"`
+	Type          string   `json:"type"`
+	Data          string   `json:"data,omitempty"`
+	Tools         []string `json:"tools,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	Effort        string   `json:"effort,omitempty"`
+	ID            int64    `json:"id,omitempty"` // queue_remove 的目標
 }
 
 type serverMsg struct {
+	RequestID    string             `json:"request_id,omitempty"`
+	CreatedAt    string             `json:"created_at,omitempty"`
+	Attachments  []db.Attachment    `json:"attachments,omitempty"`
 	Type         string             `json:"type"`
 	Value        string             `json:"value,omitempty"`
 	Content      string             `json:"content,omitempty"`
@@ -690,12 +695,26 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			}(opts, msgID, prompt)
 		}
 
-		startInput := func(text string) {
-			if err := database.AddMessage(sessionID, "user", text); err != nil {
-				slog.Info(fmt.Sprintf("[ws] save user message: %v", err))
+		startInput := func(input clientMsg, queued *db.QueuedMessage) error {
+			prompt, err := attachmentPrompt(database, sessionID, input.Data, input.AttachmentIDs)
+			if err != nil {
+				return err
 			}
-			broadcast(serverMsg{Type: "user_message", Content: text})
-			runAgent(text, nil)
+			var m *db.Message
+			if queued != nil {
+				m, err = database.PromoteQueuedMessage(sessionID, *queued)
+			} else {
+				m, err = database.AddUserMessageWithAttachments(sessionID, input.Data, input.AttachmentIDs)
+			}
+			if err != nil {
+				return err
+			}
+			broadcast(serverMsg{Type: "user_message", ID: m.ID, Content: m.Content, CreatedAt: m.CreatedAt, Attachments: m.Attachments})
+			if input.RequestID != "" {
+				send(serverMsg{Type: "input_accepted", RequestID: input.RequestID})
+			}
+			runAgent(prompt, nil)
+			return nil
 		}
 
 		// agentBusy：此時送 input 會打斷進行中的工作（runAgent 開頭會 taskCancel），因此改排隊。
@@ -711,16 +730,23 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			if paused, err := database.QueuePaused(sessionID); err != nil || paused {
 				return
 			}
-			q, err := database.PopQueuedMessage(sessionID)
+			items, err := database.ListQueuedMessages(sessionID)
 			if err != nil {
-				slog.Info(fmt.Sprintf("[ws] PopQueuedMessage: %v", err))
+				slog.Info(fmt.Sprintf("[ws] ListQueuedMessages: %v", err))
 				return
 			}
-			if q == nil {
+			if len(items) == 0 {
+				return
+			}
+			q := items[0]
+			// Keep the queued item when an attachment is missing or persistence fails.
+			if err := startInput(clientMsg{Data: q.Content, AttachmentIDs: q.AttachmentIDs}, &q); err != nil {
+				_ = database.SetQueuePaused(sessionID, true)
+				broadcast(serverMsg{Type: "error", Content: err.Error()})
+				broadcastQueue()
 				return
 			}
 			broadcastQueue()
-			startInput(q.Content)
 		}
 
 		// dispatchInput：閒置就執行；忙碌就排隊（不打斷進行中的任務）。
@@ -728,34 +754,55 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			q, err := database.ListQueuedMessages(sessionID)
 			return err == nil && len(q) > 0
 		}
-		dispatchInput := func(text string) {
+		dispatchInput := func(input clientMsg) {
+			reject := func(err error) {
+				if input.RequestID != "" {
+					send(serverMsg{Type: "input_rejected", RequestID: input.RequestID, Content: err.Error()})
+				} else {
+					send(serverMsg{Type: "error", Content: err.Error()})
+				}
+			}
+			if strings.TrimSpace(input.Data) == "" && len(input.AttachmentIDs) == 0 {
+				reject(fmt.Errorf("請輸入訊息或加入附件"))
+				return
+			}
+			if _, err := attachmentPrompt(database, sessionID, input.Data, input.AttachmentIDs); err != nil {
+				reject(err)
+				return
+			}
 			dl := dispatchLock(sessionID)
 			dl.Lock()
 			defer dl.Unlock()
 			s, err := database.GetSession(sessionID)
 			if err != nil {
 				slog.Info(fmt.Sprintf("[ws] GetSession (input): %v", err))
+				reject(err)
 				return
 			}
 			if strings.TrimSpace(s.ShellPending) != "" {
-				broadcast(serverMsg{Type: "error", Content: "請先處理待確認的 Shell 指令"})
+				reject(fmt.Errorf("請先處理待確認的 Shell 指令"))
 				return
 			}
 			if agentBusy(s) || queueHasItems() {
 				// 佇列還有東西（例如失敗後暫停）時也要排到尾端，否則閒置時的新 input 會插隊到舊項目前面。
-				if _, err := database.EnqueueMessage(sessionID, text); err != nil {
+				if _, err := database.EnqueueMessage(sessionID, input.Data, input.AttachmentIDs...); err != nil {
 					slog.Info(fmt.Sprintf("[ws] EnqueueMessage: %v", err))
-					broadcast(serverMsg{Type: "error", Content: err.Error()})
+					reject(err)
 					return
 				}
 				broadcastQueue()
+				if input.RequestID != "" {
+					send(serverMsg{Type: "input_accepted", RequestID: input.RequestID})
+				}
 				// 閒置且未暫停（例如重啟前留下的佇列）：沒有任務收尾會觸發續跑，這裡直接取出最早的一則。
 				if !agentBusy(s) {
 					drainQueueLocked()
 				}
 				return
 			}
-			startInput(text)
+			if err := startInput(input, nil); err != nil {
+				reject(err)
+			}
 		}
 
 		// drainIfIdle：session 真的閒置時才取出下一則（任務成功收尾、授權解除、手動繼續共用）。
@@ -1005,7 +1052,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			switch msg.Type {
 			case "input":
 				slog.Info(fmt.Sprintf("[ws] input len=%d", len(msg.Data)))
-				dispatchInput(msg.Data)
+				dispatchInput(msg)
 
 			case "queue_remove":
 				if err := database.DeleteQueuedMessage(sessionID, msg.ID); err != nil {

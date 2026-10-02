@@ -25,6 +25,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
   const shellBuf = useRef([]);
   const shellRenderPending = useRef(false);
   const wsRef = useRef(null);
+  const inputRequestsRef = useRef(new Map());
   const streamBuf = useRef('');
   const thinkingMode = useRef(false);
   const connGenRef = useRef(0);
@@ -135,6 +136,17 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
         if (!isCurrent() || wsRef.current !== ws) return;
         const msg = JSON.parse(evt.data);
 
+        if (msg.type === 'input_accepted' || msg.type === 'input_rejected') {
+          const request = inputRequestsRef.current.get(msg.request_id);
+          if (request && request.ws === ws) {
+            clearTimeout(request.timer);
+            inputRequestsRef.current.delete(msg.request_id);
+            if (msg.type === 'input_accepted') request.resolve();
+            else request.reject(new Error(msg.content || '送出失敗，草稿已保留'));
+          }
+          return;
+        }
+
         if (msg.type === 'sync') {
           setState(msg.value);
           if (msg.input_mode) {
@@ -243,7 +255,8 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
         }
 
         if (msg.type === 'user_message') {
-          setMessages(prev => [...prev, { role: 'user', content: msg.content, createdAt: msg.created_at || new Date().toISOString() }]);
+          const row = mapMessageRow({ ...msg, role: 'user', created_at: msg.created_at || new Date().toISOString() });
+          setMessages(prev => msg.id && prev.some(m => m.id === msg.id) ? prev : [...prev, row]);
         }
 
         if (msg.type === 'activity') {
@@ -397,6 +410,12 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
 
       ws.onclose = (evt) => {
         console.warn('[ws] 連線關閉', evt.code, evt.reason);
+        for (const [id, request] of inputRequestsRef.current) {
+          if (request.ws !== ws) continue;
+          clearTimeout(request.timer);
+          request.reject(new Error('連線中斷，草稿已保留；請確認歷史或佇列後再重試'));
+          inputRequestsRef.current.delete(id);
+        }
         if (!isCurrent() || wsRef.current !== ws) return;
         const scheduleReconnect = () => {
           reconnectTimerRef.current = setTimeout(() => {
@@ -429,6 +448,12 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     return () => {
       cancelled = true;
       clearReconnectTimer();
+      for (const [id, request] of inputRequestsRef.current) {
+        if (request.ws._gen !== effectGen) continue;
+        clearTimeout(request.timer);
+        request.reject(new Error('連線已切換，草稿已保留'));
+        inputRequestsRef.current.delete(id);
+      }
       if (wsRef.current && wsRef.current._gen === effectGen) {
         wsRef.current.close();
         wsRef.current = null;
@@ -440,9 +465,23 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     const ws = wsRef.current;
     if (!ws || ws.readyState !== 1) return false;
     if (ws._sessionId !== activeSessionRef.current || ws._sessionId !== session.id) return false;
-    ws.send(JSON.stringify(obj));
-    return true;
+    try { ws.send(JSON.stringify(obj)); return true; } catch (_) { return false; }
   }, [session.id]);
+
+  const submitInput = useCallback((data, attachmentIds) => new Promise((resolve, reject) => {
+    const ws = wsRef.current;
+    const requestId = `input-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const timer = setTimeout(() => {
+      inputRequestsRef.current.delete(requestId);
+      reject(new Error('尚未收到送出確認，草稿已保留；請確認歷史或佇列後再重試'));
+    }, 15000);
+    inputRequestsRef.current.set(requestId, { ws, resolve, reject, timer });
+    if (!send({ type: 'input', data, attachment_ids: attachmentIds, request_id: requestId })) {
+      clearTimeout(timer);
+      inputRequestsRef.current.delete(requestId);
+      reject(new Error('尚未連線，草稿已保留'));
+    }
+  }), [send]);
 
   const flushPendingModes = useCallback(() => {
     const wantPerm = normalizePermMode(agentType, mode);
@@ -503,6 +542,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     activityHint,
     queue, queuePaused,
     send,
+    submitInput,
     flushPendingModes,
     handleQuotaRefresh,
     commitPermMode,

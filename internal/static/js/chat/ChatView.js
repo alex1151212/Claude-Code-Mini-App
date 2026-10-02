@@ -23,6 +23,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     activityHint,
     queue, queuePaused,
     send,
+    submitInput,
     flushPendingModes,
     handleQuotaRefresh,
     commitPermMode,
@@ -44,8 +45,19 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const [mentionItems, setMentionItems] = useState([]);
   const [mentionActiveIdx, setMentionActiveIdx] = useState(0);
   const [mentionChips, setMentionChips] = useState([]);
-  // 已上傳、尚未送出的附件：送出時才組成 `[附件] 路徑` 前綴，輸入框保持乾淨
+  // Local previews/files are retained until the server acknowledges the message.
   const [attachments, setAttachments] = useState([]);
+  const attachmentItemsRef = useRef([]);
+  const uploadControllersRef = useRef(new Map());
+  const composerSessionRef = useRef(session.id);
+  composerSessionRef.current = session.id;
+  const pendingSendRef = useRef(null);
+  const [sending, setSending] = useState(false);
+  const updateAttachments = useCallback((update) => {
+    const next = update(attachmentItemsRef.current);
+    attachmentItemsRef.current = next;
+    setAttachments(next);
+  }, []);
   const [dragOver, setDragOver] = useState(false);
   const dragDepthRef = useRef(0);
   const bottomRef = useRef(null);
@@ -150,11 +162,19 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     setMentionItems([]);
     setMentionActiveIdx(0);
     setMentionChips([]);
-    setAttachments((prev) => {
-      prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
-      return [];
-    });
+    clearAttachments();
+    pendingSendRef.current = null;
+    setSending(false);
+    setLightboxSrc(null);
+    setDragOver(false);
+    dragDepthRef.current = 0;
   }, [session.id]);
+
+  useEffect(() => () => {
+    composerSessionRef.current = null;
+    uploadControllersRef.current.forEach(controller => controller.abort());
+    attachmentItemsRef.current.forEach(a => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+  }, []);
 
   const prevChatStateRef = useRef(null);
   // 歷史載入完成＝畫面就緒，將 focus 預設在輸入框
@@ -290,10 +310,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const handleSheetForward = (p) => {
     setForwardModal({ messageKey: p.messageKey, messageContent: p.text });
   };
-  const handleSend = (overrideText) => {
+  const handleSend = async (overrideText) => {
+    if (pendingSendRef.current || isDisabled) return;
     const raw = overrideText !== undefined && overrideText !== null ? String(overrideText) : input;
     const trimmed = raw.trim();
-    if (!trimmed && attachments.length === 0) return;
+    const selected = inputMode === 'shell' ? [] : attachmentItemsRef.current;
+    if ((!trimmed && selected.length === 0) || selected.some(a => a.status !== 'ready')) return;
     if (trimmed === '/reset' || trimmed === '/clear') {
       if (state !== 'IDLE' && state !== 'SHELL_IDLE') return;
       if (!flushPendingModes()) return;
@@ -316,15 +338,25 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     if (!idle && !canQueue) return;
     // 排隊時不 flush 模式：set_mode 等會廣播 idle 狀態，執行中送會讓 UI 誤判完成。
     if (idle && !flushPendingModes()) return;
-    const attachPrefix = attachments.map((a) => `[附件] ${a.path}
-`).join('');
-    const expanded = attachPrefix + expandMentionPrompt(trimmed, session, mentionChips);
-    if (!send({ type: 'input', data: expanded })) return;
-    clearDraftInputForSession(session.id);
-    setInput('');
-    clearAttachments();
-    setMentionChips([]);
-    closeComposerMenus();
+    const token = { sessionId: session.id };
+    pendingSendRef.current = token;
+    setSending(true);
+    try {
+      await submitInput(expandMentionPrompt(trimmed, session, mentionChips), selected.map(a => a.attachmentId));
+      clearDraftInputForSession(token.sessionId);
+      if (composerSessionRef.current !== token.sessionId || pendingSendRef.current !== token) return;
+      setInput('');
+      clearAttachments();
+      setMentionChips([]);
+      closeComposerMenus();
+    } catch (err) {
+      if (composerSessionRef.current === token.sessionId && pendingSendRef.current === token) showToast(err.message || '送出失敗，草稿已保留', { error: true, duration: 5000 });
+    } finally {
+      if (composerSessionRef.current === token.sessionId && pendingSendRef.current === token) {
+        pendingSendRef.current = null;
+        setSending(false);
+      }
+    }
   };
 
   const applySuggestion = (text) => {
@@ -334,13 +366,16 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   };
 
   const clearAttachments = () => {
-    setAttachments((prev) => {
-      prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
-      return [];
-    });
+    uploadControllersRef.current.forEach(controller => controller.abort());
+    uploadControllersRef.current.clear();
+    attachmentItemsRef.current.forEach(a => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+    updateAttachments(() => []);
   };
   const removeAttachment = (id) => {
-    setAttachments((prev) => {
+    if (pendingSendRef.current) return;
+    uploadControllersRef.current.get(id)?.abort();
+    uploadControllersRef.current.delete(id);
+    updateAttachments((prev) => {
       const hit = prev.find((a) => a.id === id);
       if (hit && hit.previewUrl) URL.revokeObjectURL(hit.previewUrl);
       return prev.filter((a) => a.id !== id);
@@ -439,38 +474,45 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const handleInterrupt = () => send({ type: 'interrupt' });
 
   const fileInputRef = useRef(null);
-  const [uploading, setUploading] = useState(false);
-  // 上傳：存到 runtime workspace，成功後成為輸入框上方的附件 chip；送出時才把絕對路徑組進訊息（各家 CLI 通用）。
-  // 迴紋針、貼上、拖放共用。
-  const uploadFiles = async (files) => {
-    if (!files.length || uploading) return;
-    setUploading(true);
-    const added = [];
+  const uploading = attachments.some(a => a.status === 'uploading');
+  const uploadAttachment = async (item, sessionId) => {
+    if (!attachmentItemsRef.current.some(a => a.id === item.id) || composerSessionRef.current !== sessionId) return;
+    const controller = new AbortController();
+    uploadControllersRef.current.set(item.id, controller);
+    updateAttachments(prev => prev.map(a => a.id === item.id ? { ...a, status: 'uploading', error: '' } : a));
     try {
-      for (const f of files) {
-        const fd = new FormData();
-        fd.append('file', f);
-        const res = await apiFetch(`/sessions/${session.id}/uploads`, { method: 'POST', body: fd });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showToast(`${f.name}：${data.error || '上傳失敗'}`, { error: true, duration: 3000 });
-          continue;
-        }
-        added.push({
-          id: `${Date.now()}-${added.length}`,
-          name: f.name,
-          path: data.path,
-          previewUrl: f.type.startsWith('image/') ? URL.createObjectURL(f) : '',
-        });
-      }
-    } catch (_) {
-      showToast('上傳失敗', { error: true });
+      if (item.file.size > 8 * 1024 * 1024) throw new Error('檔案超過上限 8 MB');
+      if (!item.file.size) throw new Error('檔案是空的');
+      const fd = new FormData();
+      fd.append('file', item.file);
+      const res = await apiFetch(`/sessions/${sessionId}/uploads`, { method: 'POST', body: fd, signal: controller.signal });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '上傳失敗');
+      if (!data.attachment?.id) throw new Error('附件資訊無法讀取');
+      if (controller.signal.aborted || composerSessionRef.current !== sessionId) return;
+      updateAttachments(prev => prev.map(a => a.id === item.id ? { ...a, attachmentId: data.attachment.id, size: data.attachment.size, name: data.attachment.name, status: 'ready' } : a));
+    } catch (err) {
+      if (controller.signal.aborted || composerSessionRef.current !== sessionId) return;
+      updateAttachments(prev => prev.map(a => a.id === item.id ? { ...a, status: 'error', error: err.message || '上傳失敗' } : a));
     } finally {
-      setUploading(false);
+      if (uploadControllersRef.current.get(item.id) === controller) uploadControllersRef.current.delete(item.id);
     }
-    if (!added.length) return;
-    setAttachments((prev) => [...prev, ...added]);
+  };
+  // Insert all placeholders immediately; serial uploads keep mobile memory bounded.
+  const uploadFiles = async (files) => {
+    if (!files.length || pendingSendRef.current || inputMode === 'shell' || isDisabled) return;
+    const sessionId = session.id;
+    const room = Math.max(0, 32 - attachmentItemsRef.current.length);
+    if (files.length > room) showToast('每則訊息最多 32 個附件', { error: true });
+    const items = files.slice(0, room).map(file => ({ id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`, file, name: file.name, size: file.size, previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : '', status: 'uploading' }));
+    updateAttachments(prev => [...prev, ...items]);
     focusChatInput();
+    for (const item of items) await uploadAttachment(item, sessionId);
+  };
+  const retryAttachment = (id) => {
+    if (pendingSendRef.current) return;
+    const item = attachmentItemsRef.current.find(a => a.id === id);
+    if (item?.status === 'error') uploadAttachment(item, session.id);
   };
   const handleFilesPicked = (e) => {
     const files = Array.from(e.target.files || []);
@@ -516,6 +558,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   };
 
   const handleInputModeChange = (newMode) => {
+    if (pendingSendRef.current) return;
     const busy = ['THINKING', 'STREAMING', 'AWAITING_CONFIRM', 'SHELL_RUNNING', 'SHELL_AWAITING_APPROVAL', 'SHELL_EXEC', 'AWAITING_SHELL_CONFIRM'].includes(state);
     if (busy) return;
     setInputMode(newMode);
@@ -638,11 +681,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
           </div>
         )}
         {messages.map((m, i) => {
+          const userParts = m.role === 'user' ? attachmentMessageParts(m, session.id) : null;
           const msgKey = m.id != null ? String(m.id) : `idx-${i}`;
           const forwardBody =
             m.role === 'claude' && String(m.resultText || '').trim() !== ''
               ? m.resultText
-              : (m.content || '').trim();
+              : m.role === 'user' ? attachmentMessageCopy(m, session.id) : (m.content || '').trim();
           const canForwardShellOrAgent =
             (m.role === 'claude' || m.role === 'shell') && !m.streaming && !!String(forwardBody || '').trim();
           const showStreamingTail =
@@ -669,7 +713,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
             >
             {m.role === 'user' ? (
               <div className="bubble-user text-white px-4 py-3 text-sm w-fit max-w-full min-w-0">
-                <div className="whitespace-pre-wrap break-words leading-relaxed">{m.content}</div>
+                <MessageAttachments items={userParts.attachments} onPreview={setLightboxSrc} />
+                {userParts.text && <div className="whitespace-pre-wrap break-words leading-relaxed">{userParts.text}</div>}
               </div>
             ) : m.role === 'shell' ? (
               <div className="bubble-shell px-4 py-3 text-sm w-fit max-w-full min-w-0">
@@ -861,6 +906,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         ) : (
           <div className="w-full relative" ref={composerWrapRef}>
             <QueuedMessages
+              sessionId={session.id}
               items={queue}
               paused={queuePaused}
               canResume={queue.length > 0 && (queuePaused || state === 'IDLE' || state === 'SHELL_IDLE')}
@@ -877,12 +923,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                 onSelect={handleMentionSelect}
               />
             )}
-            <AttachmentChips items={attachments} onRemove={removeAttachment} />
             <div className={(inputMode === 'shell' ? 'ra-cmd-bar shell' : 'ra-cmd-bar') + ' w-full' + (dragOver ? ' ring-2 ring-violet-500/70' : '')}>
               <ModeToggleBtn
                 value={inputMode}
                 onChange={handleInputModeChange}
-                disabled={modeSwitchDisabled}
+                disabled={modeSwitchDisabled || sending}
                 agentLabel={AGENT_LABEL[agentType] || 'Claude'}
               />
               {inputMode !== 'shell' && (
@@ -896,7 +941,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                     onChange={handleFilesPicked}
                   />
                   <button type="button" onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading || isDisabled}
+                    disabled={sending || isDisabled}
                     aria-label="附加圖片或檔案"
                     title="附加圖片或檔案（上限 8 MB）"
                     className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] text-[oklch(0.75_0.01_264)] hover:bg-[oklch(0.22_0.02_264)] hover:text-violet-300 disabled:opacity-40 transition-colors">
@@ -912,7 +957,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   </button>
                 </>
               )}
-              <div className="relative flex w-full min-w-0 order-first items-end" ref={slashInputWrapRef}>
+              <div className="relative flex w-full min-w-0 order-first flex-col" ref={slashInputWrapRef}>
+                {inputMode !== 'shell' && <AttachmentChips items={attachments} onRemove={removeAttachment} onRetry={retryAttachment} disabled={sending} />}
                 {slashMenuOpen && (
                   <SlashCommandMenu
                     items={slashMenuItems}
@@ -935,8 +981,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   onSelect={(e) => syncComposerMenus(e.target.value, e.target.selectionStart, inputMode)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  disabled={isDisabled}
-                  placeholder={inputMode === 'shell' ? `輸入 ${shellType || 'Shell'} 指令…` : canQueue ? '執行中…送出會排入佇列' : '輸入指令… @ 標記 session'}
+                  disabled={isDisabled || sending}
+                  placeholder={inputMode === 'shell' ? `輸入 ${shellType || 'Shell'} 指令…` : canQueue ? '執行中…送出會排入佇列' : attachments.length ? '想請我如何處理這些附件？（可直接送出）' : '輸入指令… @ 標記 session'}
                   rows={1}
                   className={[
                     'flex-1 min-w-0 w-full resize-none overflow-hidden border-0 bg-transparent px-1 py-1.5 text-[13.5px] leading-relaxed placeholder-[oklch(0.5_0.01_264)] focus:outline-none disabled:opacity-40 min-h-[2rem] max-h-[min(40vh,12rem)] box-border',
@@ -954,9 +1000,9 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
                 </button>
               )}
-              <button type="button" onClick={() => handleSend()} disabled={isDisabled || (!input.trim() && attachments.length === 0)}
+              <button type="button" onClick={() => handleSend()} disabled={sending || isDisabled || (!input.trim() && (inputMode === 'shell' || attachments.length === 0)) || (inputMode !== 'shell' && attachments.some(a => a.status !== 'ready'))}
                 aria-label={canQueue ? '排入佇列' : '送出'}
-                title={(canQueue ? '排入佇列' : '送出') + (coarsePointer ? '' : '（Enter）')}
+                title={sending ? '送出中…' : inputMode !== 'shell' && attachments.some(a => a.status !== 'ready') ? '請等待附件上傳完成，或移除失敗的附件' : (canQueue ? '排入佇列' : '送出') + (coarsePointer ? '' : '（Enter）')}
                 className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] ${inputMode === 'shell' ? 'bg-amber-700 hover:bg-amber-600' : 'bg-[oklch(0.62_0.19_275)] hover:brightness-110'} disabled:opacity-30 text-white transition-colors text-sm`}>
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
               </button>
@@ -1023,33 +1069,8 @@ function PermToolDetail({ tool }) {
   );
 }
 
-/** 已上傳、待送出的附件：圖片顯示縮圖，其他檔案顯示檔名；× 移除（只是不帶進這次訊息，不刪伺服器上的檔）。 */
-function AttachmentChips({ items, onRemove }) {
-  if (!Array.isArray(items) || items.length === 0) return null;
-  return (
-    <div className="mb-2 flex flex-wrap gap-2" aria-label="待送出的附件">
-      {items.map((a) => (
-        <div key={a.id} className="relative flex items-center gap-2 rounded-lg border border-[oklch(0.3_0.02_264)] bg-[oklch(0.19_0.02_264)] p-1 pr-6 max-w-[14rem]" title={a.name}>
-          {a.previewUrl ? (
-            <img src={a.previewUrl} alt="" className="h-10 w-10 shrink-0 rounded-md object-cover" />
-          ) : (
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[oklch(0.24_0.02_264)] text-[10px] font-semibold uppercase text-[oklch(0.7_0.01_264)]">
-              {(a.name.split('.').pop() || 'file').slice(0, 4)}
-            </span>
-          )}
-          <span className="min-w-0 truncate text-xs text-[oklch(0.8_0.01_264)]">{a.name}</span>
-          <button type="button" onClick={() => onRemove(a.id)} aria-label={`移除附件 ${a.name}`}
-            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full text-[oklch(0.6_0.01_264)] hover:bg-[oklch(0.28_0.02_264)] hover:text-red-300">
-            ×
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /** 排隊中的訊息：每則可移除；暫停（前一輪失敗／中斷／拒絕授權）時需手動繼續。 */
-function QueuedMessages({ items, paused, canResume, onRemove, onResume }) {
+function QueuedMessages({ items, paused, canResume, onRemove, onResume, sessionId }) {
   if (!Array.isArray(items) || items.length === 0) return null;
   return (
     <div className="mb-2 rounded-lg border border-[oklch(0.3_0.02_264)] bg-[oklch(0.18_0.02_264)] px-2 py-1.5 text-xs" aria-label="排隊中的訊息">
@@ -1066,7 +1087,7 @@ function QueuedMessages({ items, paused, canResume, onRemove, onResume }) {
         {items.map((q, i) => (
           <li key={q.id} className="flex items-center gap-1.5 text-[oklch(0.85_0.01_264)]">
             <span className="shrink-0 font-mono text-[10px] text-[oklch(0.55_0.01_264)]">{i + 1}.</span>
-            <span className="min-w-0 flex-1 truncate" title={q.content}>{q.content}</span>
+            <span className="min-w-0 flex-1 truncate" title={attachmentQueueSummary(q, sessionId)}>{attachmentQueueSummary(q, sessionId)}</span>
             <button type="button" onClick={() => onRemove(q.id)}
               aria-label="移除這則排隊訊息"
               className="shrink-0 px-1 text-[oklch(0.6_0.01_264)] hover:text-red-300">

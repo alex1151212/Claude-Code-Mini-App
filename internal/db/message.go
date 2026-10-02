@@ -14,13 +14,15 @@ const (
 )
 
 type Message struct {
-	ID         int64  `json:"id"`
-	SessionID  string `json:"session_id"`
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	ResultText string `json:"result_text,omitempty"` // stream-json 最終 result 行文字（若有）；複製時優先
-	Status     string `json:"status"`
-	CreatedAt  string `json:"created_at"`
+	ID            int64        `json:"id"`
+	SessionID     string       `json:"session_id"`
+	Role          string       `json:"role"`
+	Content       string       `json:"content"`
+	ResultText    string       `json:"result_text,omitempty"` // stream-json 最終 result 行文字（若有）；複製時優先
+	Status        string       `json:"status"`
+	CreatedAt     string       `json:"created_at"`
+	AttachmentIDs []string     `json:"-"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 
 func (db *DB) AddMessage(sessionID, role, content string) error {
@@ -165,7 +167,7 @@ func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
 	if q.IncludeResult {
 		resultCol = `COALESCE(result_text, '')`
 	}
-	inner := `SELECT id, session_id, role, content, status, created_at, ` + resultCol + ` AS result_text FROM messages WHERE session_id = ?`
+	inner := `SELECT id, session_id, role, content, status, created_at, ` + resultCol + ` AS result_text, attachment_ids FROM messages WHERE session_id = ?`
 	args := []any{q.SessionID}
 	if q.Since != "" {
 		inner += ` AND created_at >= ?`
@@ -203,7 +205,12 @@ func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
 	var msgs []*Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Status, &m.CreatedAt, &m.ResultText); err != nil {
+		var ids string
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Status, &m.CreatedAt, &m.ResultText, &ids); err != nil {
+			return nil, err
+		}
+		m.AttachmentIDs, err = decodeAttachmentIDs(ids)
+		if err != nil {
 			return nil, err
 		}
 		if m.Status == "" {
@@ -211,7 +218,18 @@ func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
 		}
 		msgs = append(msgs, &m)
 	}
-	return msgs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	all, err := db.AttachmentMap(q.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range msgs {
+		m.Attachments = hydrateAttachments(m.AttachmentIDs, all)
+	}
+	return msgs, nil
 }
 
 // ActivityRow 是跨 session 活動查詢的一則訊息，帶 session 元資料。

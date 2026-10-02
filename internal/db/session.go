@@ -117,6 +117,9 @@ func (db *DB) DeleteSession(id string) error {
 	if err := db.ClearQueuedMessages(id); err != nil {
 		return err
 	}
+	if _, err := db.Exec(`DELETE FROM attachments WHERE session_id = ?`, id); err != nil {
+		return err
+	}
 	_, err := db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 	return err
 }

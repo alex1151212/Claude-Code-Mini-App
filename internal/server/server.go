@@ -291,6 +291,8 @@ func Start(ctx context.Context) (*Server, error) {
 
 	uh := api.NewUploadHandler(database)
 	app.Post("/sessions/:id/uploads", authMiddleware, uh.Upload)
+	app.Get("/sessions/:id/uploads/:attachmentId/details", authMiddleware, uh.Details)
+	app.Get("/sessions/:id/uploads/:attachmentId", authMiddleware, uh.Content)
 
 	quotaSvc := quota.NewService()
 	go quotaSvc.Warmup(context.Background())

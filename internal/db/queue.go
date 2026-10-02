@@ -7,14 +7,20 @@ import (
 
 // QueuedMessage 是 session 執行中時使用者先送出、等前一個任務完成才執行的訊息。
 type QueuedMessage struct {
-	ID        int64  `json:"id"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
+	ID            int64        `json:"id"`
+	Content       string       `json:"content"`
+	CreatedAt     string       `json:"created_at"`
+	AttachmentIDs []string     `json:"-"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 
 // EnqueueMessage 把訊息排到佇列尾端。佇列原本為空時順便解除暫停：
 // 暫停只針對「失敗當下還留著的那批」，新的一批重新開始。
-func (db *DB) EnqueueMessage(sessionID, content string) (*QueuedMessage, error) {
+func (db *DB) EnqueueMessage(sessionID, content string, ids ...string) (*QueuedMessage, error) {
+	attachments, err := db.ResolveAttachments(sessionID, ids)
+	if err != nil {
+		return nil, err
+	}
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM queued_messages WHERE session_id = ?`, sessionID).Scan(&n); err != nil {
 		return nil, err
@@ -24,7 +30,7 @@ func (db *DB) EnqueueMessage(sessionID, content string) (*QueuedMessage, error) 
 			return nil, err
 		}
 	}
-	res, err := db.Exec(`INSERT INTO queued_messages (session_id, content) VALUES (?, ?)`, sessionID, content)
+	res, err := db.Exec(`INSERT INTO queued_messages (session_id, content, attachment_ids) VALUES (?, ?, ?)`, sessionID, content, attachmentIDsJSON(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -32,14 +38,14 @@ func (db *DB) EnqueueMessage(sessionID, content string) (*QueuedMessage, error) 
 	if err != nil {
 		return nil, err
 	}
-	q := &QueuedMessage{ID: id, Content: content}
+	q := &QueuedMessage{ID: id, Content: content, AttachmentIDs: ids, Attachments: attachments}
 	err = db.QueryRow(`SELECT created_at FROM queued_messages WHERE id = ?`, id).Scan(&q.CreatedAt)
 	return q, err
 }
 
 // ListQueuedMessages 依送出順序（FIFO）回傳佇列。
 func (db *DB) ListQueuedMessages(sessionID string) ([]QueuedMessage, error) {
-	rows, err := db.Query(`SELECT id, content, created_at FROM queued_messages WHERE session_id = ? ORDER BY id`, sessionID)
+	rows, err := db.Query(`SELECT id, content, created_at, attachment_ids FROM queued_messages WHERE session_id = ? ORDER BY id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -47,12 +53,28 @@ func (db *DB) ListQueuedMessages(sessionID string) ([]QueuedMessage, error) {
 	out := []QueuedMessage{}
 	for rows.Next() {
 		var q QueuedMessage
-		if err := rows.Scan(&q.ID, &q.Content, &q.CreatedAt); err != nil {
+		var ids string
+		if err := rows.Scan(&q.ID, &q.Content, &q.CreatedAt, &ids); err != nil {
+			return nil, err
+		}
+		q.AttachmentIDs, err = decodeAttachmentIDs(ids)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, q)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	all, err := db.AttachmentMap(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Attachments = hydrateAttachments(out[i].AttachmentIDs, all)
+	}
+	return out, nil
 }
 
 // PopQueuedMessage 取出並刪除最早的一則；佇列為空時回傳 nil, nil。
@@ -63,11 +85,16 @@ func (db *DB) PopQueuedMessage(sessionID string) (*QueuedMessage, error) {
 	}
 	defer tx.Rollback()
 	var q QueuedMessage
-	err = tx.QueryRow(`SELECT id, content, created_at FROM queued_messages WHERE session_id = ? ORDER BY id LIMIT 1`, sessionID).
-		Scan(&q.ID, &q.Content, &q.CreatedAt)
+	var ids string
+	err = tx.QueryRow(`SELECT id, content, created_at, attachment_ids FROM queued_messages WHERE session_id = ? ORDER BY id LIMIT 1`, sessionID).
+		Scan(&q.ID, &q.Content, &q.CreatedAt, &ids)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	q.AttachmentIDs, err = decodeAttachmentIDs(ids)
 	if err != nil {
 		return nil, err
 	}

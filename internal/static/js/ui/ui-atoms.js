@@ -843,6 +843,7 @@ function mapMessageRow(m) {
     id: m.id,
     role,
     content,
+    attachments: Array.isArray(m.attachments) ? m.attachments : [],
     resultText,
     status,
     createdAt: m.created_at || m.createdAt || null,
