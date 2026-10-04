@@ -202,10 +202,12 @@ func (db *DB) TouchSession(id string) error {
 }
 
 // ResetRunningSessions sets status=running sessions back to idle on server start.
+// awaiting_confirm without pending_denials (kiroacp mid-turn approval) is reset too:
+// its approval channel lived in memory and is gone after a restart.
 func (db *DB) ResetRunningSessions() error {
 	_, err := db.Exec(
-		`UPDATE sessions SET status = ? WHERE status = ?`,
-		SessionStatusIdle, SessionStatusRunning,
+		`UPDATE sessions SET status = ? WHERE status = ? OR (status = ? AND pending_denials = '')`,
+		SessionStatusIdle, SessionStatusRunning, SessionStatusAwaitingConfirm,
 	)
 	return err
 }

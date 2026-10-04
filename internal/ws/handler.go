@@ -36,6 +36,23 @@ func clearPendingDenials(database *db.DB, sessionID string) {
 	}
 }
 
+// clearStaleAwaitingConfirm：沒有任務在跑、也沒有 Claude 的 pending_denials，卻停在 awaiting_confirm
+// （例如 kiroacp 等授權時 server 重啟）就改回 idle。回傳是否有改。
+func clearStaleAwaitingConfirm(database *db.DB, sessionID string) bool {
+	if taskIsActive(sessionID) {
+		return false
+	}
+	s, err := database.GetSession(sessionID)
+	if err != nil || s.Status != db.SessionStatusAwaitingConfirm || strings.TrimSpace(s.PendingDenials) != "" {
+		return false
+	}
+	if err := database.UpdateSessionStatus(sessionID, db.SessionStatusIdle); err != nil {
+		slog.Info(fmt.Sprintf("[ws] clear stale awaiting_confirm: %v", err))
+		return false
+	}
+	return true
+}
+
 func clearShellPending(database *db.DB, sessionID string) {
 	if err := database.UpdateShellPending(sessionID, ""); err != nil {
 		slog.Info(fmt.Sprintf("[ws] 清除 shell_pending 失敗: %v", err))
@@ -135,9 +152,6 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 		var mu sync.Mutex      // 保護 agentSessionID 等連線狀態
 		var writeMu sync.Mutex // 序列化 WebSocket 寫入（goroutine 不可並發 WriteMessage）
-		// pendingPerm：kiroacp 互動式授權的回傳通道（true=allow, false=deny）。
-		// 非 nil 表示 runner 正在等使用者決定；由 mu 保護。
-		var pendingPerm chan bool
 		agentType := sess.AgentType
 		if agentType == "" {
 			agentType = agent.TypeClaude
@@ -206,6 +220,9 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 		if isClaude && sess.PendingDenials != "" {
 			send(serverMsg{Type: "permission_request", Tools: json.RawMessage(sess.PendingDenials)})
 			slog.Info(fmt.Sprintf("[ws] restored pending_denials session=%s", sessionID))
+		}
+		if tools, ok := permPending(sessionID); ok {
+			send(serverMsg{Type: "permission_request", Tools: tools})
 		}
 
 		if strings.TrimSpace(sess.ShellPending) != "" {
@@ -398,18 +415,17 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			// 廣播 permission_request 給前端並阻塞，直到使用者 allow_once/deny_once 或 ctx 取消。
 			if agentType == agent.TypeKiroACP {
 				opts.RequestPermission = func(rctx context.Context, req agent.PermissionRequest) string {
-					ch := make(chan bool, 1)
-					mu.Lock()
-					pendingPerm = ch
-					mu.Unlock()
-
-					_ = database.UpdateSessionStatus(sessionID, db.SessionStatusAwaitingConfirm)
-					broadcast(serverMsg{Type: "status", Value: StateAwaitingConfirm})
 					title := strings.TrimSpace(req.Title)
 					if title == "" {
 						title = "工具授權請求"
 					}
-					broadcast(serverMsg{Type: "permission_request", Tools: []map[string]string{{"tool_name": title}}})
+					tools := []map[string]string{{"tool_name": title}}
+					pe := &pendingPermEntry{ch: make(chan bool, 1), tools: tools}
+					permSet(sessionID, pe)
+
+					_ = database.UpdateSessionStatus(sessionID, db.SessionStatusAwaitingConfirm)
+					broadcast(serverMsg{Type: "status", Value: StateAwaitingConfirm})
+					broadcast(serverMsg{Type: "permission_request", Tools: tools})
 					notifyTaskAsync(botToken, tgUserID, notifyCfg, tg.TaskAlert{
 						SessionName: sess.Name,
 						Outcome:     tg.OutcomeConfirm,
@@ -417,14 +433,12 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 					var allow bool
 					select {
-					case allow = <-ch:
+					case allow = <-pe.ch:
 					case <-rctx.Done():
 						allow = false
 					}
 
-					mu.Lock()
-					pendingPerm = nil
-					mu.Unlock()
+					permClear(sessionID, pe)
 					if rctx.Err() == nil {
 						_ = database.UpdateSessionStatus(sessionID, db.SessionStatusRunning)
 						broadcast(serverMsg{Type: "status", Value: StateStreaming})
@@ -1141,18 +1155,14 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 			case "allow_once":
 				// kiroacp 互動式授權：解析 pending 而非重跑。
-				mu.Lock()
-				chAllow := pendingPerm
-				mu.Unlock()
-				if chAllow != nil {
-					select {
-					case chAllow <- true:
-					default:
-					}
+				if permResolve(sessionID, true) {
 					continue
 				}
 				if !isClaude {
-					slog.Info(fmt.Sprintf("[ws] agent=%s: allow_once ignored", agentType))
+					slog.Info(fmt.Sprintf("[ws] agent=%s: allow_once ignored (no pending request)", agentType))
+					if clearStaleAwaitingConfirm(database, sessionID) {
+						broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
+					}
 					continue
 				}
 				sAllow, err := database.GetSession(sessionID)
@@ -1182,18 +1192,14 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 			case "deny_once":
 				// kiroacp 互動式授權：解析 pending 而非重跑。
-				mu.Lock()
-				chDeny := pendingPerm
-				mu.Unlock()
-				if chDeny != nil {
-					select {
-					case chDeny <- false:
-					default:
-					}
+				if permResolve(sessionID, false) {
 					continue
 				}
 				if !isClaude {
-					slog.Info(fmt.Sprintf("[ws] agent=%s: deny_once ignored", agentType))
+					slog.Info(fmt.Sprintf("[ws] agent=%s: deny_once ignored (no pending request)", agentType))
+					if clearStaleAwaitingConfirm(database, sessionID) {
+						broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
+					}
 					continue
 				}
 				clearPendingDenials(database, sessionID)
@@ -1284,8 +1290,16 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				// 第二次按（或 PID 還沒拿到）才 cancel context 強制 KillTree，
 				// 收尾一律由 Run goroutine 的既有邏輯處理，避免前端提早變 IDLE 但進程還在跑。
 				// 使用者按停止＝不要自動接著跑：軟中斷時子進程可能仍正常結束（exit 0），不暫停會續跑佇列。
+				// kiroacp 等授權時子進程在等我們回覆，軟信號不會有反應，直接強制取消。
+				if _, waiting := permPending(sessionID); waiting {
+					taskCancel(sessionID)
+					pauseQueue()
+					continue
+				}
 				if taskInterrupt(sessionID) {
 					pauseQueue()
+				} else if clearStaleAwaitingConfirm(database, sessionID) {
+					broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
 				}
 
 			case "shell_allow_once":

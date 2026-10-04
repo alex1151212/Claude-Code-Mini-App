@@ -348,11 +348,11 @@ type askSessionIn struct {
 }
 
 type askSessionOut struct {
-	State             string          `json:"state" jsonschema:"本輪結果狀態：idle 已回答完；awaiting_permission 或 shell_pending 對方卡在授權；running 逾時仍在跑"`
-	Text              string          `json:"text,omitempty"`
-	PendingPermission json.RawMessage `json:"pending_permission,omitempty"`
-	Error             string          `json:"error,omitempty"`
-	TimedOut          bool            `json:"timed_out,omitempty"`
+	State             string `json:"state" jsonschema:"本輪結果狀態：idle 已回答完；awaiting_permission 或 shell_pending 對方卡在授權；running 逾時仍在跑"`
+	Text              string `json:"text,omitempty"`
+	PendingPermission any    `json:"pending_permission,omitempty"`
+	Error             string `json:"error,omitempty"`
+	TimedOut          bool   `json:"timed_out,omitempty"`
 }
 
 func (d *deps) askSession(ctx context.Context, _ *gomcp.CallToolRequest, in askSessionIn) (*gomcp.CallToolResult, askSessionOut, error) {
@@ -374,7 +374,7 @@ func (d *deps) askSession(ctx context.Context, _ *gomcp.CallToolRequest, in askS
 		return nil, askSessionOut{}, err
 	}
 	return nil, askSessionOut{
-		State: res.State, Text: res.Text, PendingPermission: res.PendingPermission,
+		State: res.State, Text: res.Text, PendingPermission: rawToAny(res.PendingPermission),
 		Error: res.Error, TimedOut: res.TimedOut,
 	}, nil
 }
@@ -382,18 +382,28 @@ func (d *deps) askSession(ctx context.Context, _ *gomcp.CallToolRequest, in askS
 // --- get_status ---
 
 type getStatusOut struct {
-	State             string          `json:"state"` // idle | running | awaiting_permission | shell_pending
-	LatestText        string          `json:"latest_text,omitempty"`
-	PendingPermission json.RawMessage `json:"pending_permission,omitempty"`
-	PendingShell      *pendingShell   `json:"pending_shell,omitempty"`
-	Error             string          `json:"error,omitempty"`
-	Connected         bool            `json:"connected"`
+	State             string        `json:"state"` // idle | running | awaiting_permission | shell_pending
+	LatestText        string        `json:"latest_text,omitempty"`
+	PendingPermission any           `json:"pending_permission,omitempty"`
+	PendingShell      *pendingShell `json:"pending_shell,omitempty"`
+	Error             string        `json:"error,omitempty"`
+	Connected         bool          `json:"connected"`
+}
+
+// rawToAny：json.RawMessage 會被 schema 推導成「整數陣列」，實際內容是物件陣列，
+// 輸出驗證會失敗；解成 any 讓 schema 不設限。
+func rawToAny(raw json.RawMessage) any {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	return v
 }
 
 func (d *deps) getStatus(_ context.Context, _ *gomcp.CallToolRequest, in sessionIDIn) (*gomcp.CallToolResult, getStatusOut, error) {
 	state, text, perm, shell, lastErr, connected := d.reg.Status(in.SessionID)
 	return nil, getStatusOut{
-		State: state, LatestText: text, PendingPermission: perm,
+		State: state, LatestText: text, PendingPermission: rawToAny(perm),
 		PendingShell: shell, Error: lastErr, Connected: connected,
 	}, nil
 }

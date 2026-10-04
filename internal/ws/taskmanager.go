@@ -21,6 +21,7 @@ var taskManager struct {
 
 func init() {
 	taskManager.tasks = make(map[string]*taskEntry)
+	pendingPerms.m = make(map[string]*pendingPermEntry)
 }
 
 // dispatchLocks 序列化「判斷忙碌→排隊或啟動」與「佇列取出→啟動」。
@@ -32,6 +33,59 @@ var dispatchLocks sync.Map // sessionID → *sync.Mutex
 func dispatchLock(sessionID string) *sync.Mutex {
 	m, _ := dispatchLocks.LoadOrStore(sessionID, &sync.Mutex{})
 	return m.(*sync.Mutex)
+}
+
+// pendingPerms：kiroacp 互動式授權的等待中請求，以 session 為 key。
+// 不能放在單一 WS 連線的 closure：發起任務的分頁斷線／重連、別的分頁或 MCP loopback 連線送來的
+// allow_once/deny_once 會找不到通道，runner 就永遠卡在等授權。
+type pendingPermEntry struct {
+	ch    chan bool // true=allow, false=deny
+	tools any       // 重連時重送 permission_request 用
+}
+
+var pendingPerms struct {
+	mu sync.Mutex
+	m  map[string]*pendingPermEntry
+}
+
+func permSet(sessionID string, e *pendingPermEntry) {
+	pendingPerms.mu.Lock()
+	pendingPerms.m[sessionID] = e
+	pendingPerms.mu.Unlock()
+}
+
+// permClear 只刪自己登記的那筆，避免舊請求收尾時刪掉新請求。
+func permClear(sessionID string, e *pendingPermEntry) {
+	pendingPerms.mu.Lock()
+	if pendingPerms.m[sessionID] == e {
+		delete(pendingPerms.m, sessionID)
+	}
+	pendingPerms.mu.Unlock()
+}
+
+func permPending(sessionID string) (tools any, ok bool) {
+	pendingPerms.mu.Lock()
+	defer pendingPerms.mu.Unlock()
+	e, ok := pendingPerms.m[sessionID]
+	if !ok {
+		return nil, false
+	}
+	return e.tools, true
+}
+
+// permResolve 把決定交給等待中的 runner；回傳 false 表示沒有等待中的請求。
+func permResolve(sessionID string, allow bool) bool {
+	pendingPerms.mu.Lock()
+	e, ok := pendingPerms.m[sessionID]
+	pendingPerms.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case e.ch <- allow:
+	default: // 已有決定在途（重複點擊），忽略
+	}
+	return true
 }
 
 func taskStart(sessionID string, cancel context.CancelFunc, msgID int64) {
