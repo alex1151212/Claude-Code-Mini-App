@@ -15,6 +15,12 @@ function shareLinkOf(s) {
   return `${window.location.origin}${appPath(s.path || `/share/${s.token}`)}`;
 }
 
+/** 含 PIN 的分享連結：開啟後加入表單會自動填入 PIN（見 JoinView 的 ?pin=），訪客只需輸入暱稱。 */
+function shareLinkWithPin(s) {
+  const link = shareLinkOf(s);
+  return s.pin ? `${link}?pin=${encodeURIComponent(s.pin)}` : link;
+}
+
 /** 剩餘毫秒 → 「1 小時 5 分」這類短字串。 */
 function formatRemaining(ms) {
   if (ms <= 0) return '已結束';
@@ -108,6 +114,8 @@ function ShareRow({ share, onRevoke, showSession = false, onJump = null, pinReve
           className="flex-1 min-w-0 rounded-md bg-[oklch(0.13_0.02_264)] border border-[oklch(0.28_0.02_264)] px-2 py-1 text-xs ra-mono text-[oklch(0.8_0.01_264)]"
         />
         <button type="button" className={shareBtnCls} onClick={() => copy(link, '連結')}>複製連結</button>
+        <button type="button" className={shareBtnCls} onClick={() => copy(shareLinkWithPin(share), '連結（含 PIN）')}
+          title="連結已帶入 PIN，對方開啟後只需輸入暱稱">複製連結＋PIN</button>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">

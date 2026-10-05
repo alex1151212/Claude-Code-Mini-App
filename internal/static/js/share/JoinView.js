@@ -82,9 +82,25 @@ function ShareEndedView({ message }) {
   );
 }
 
+/** 讀網址的選填參數 ?pin=123456&name=Alex，用來預填加入表單（不會自動送出）。 */
+function readJoinPrefill() {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    return {
+      pin: (q.get('pin') || '').replace(/\D/g, '').slice(0, 6),
+      name: (q.get('name') || '').trim().slice(0, 20),
+    };
+  } catch (_) {
+    return { pin: '', name: '' };
+  }
+}
+
 function JoinView({ token, onJoined }) {
-  const [pin, setPin] = useState('');
+  const [prefill] = useState(readJoinPrefill);
+  const [pin, setPin] = useState(prefill.pin);
+  // 網址帶 name 時優先於上次記住的暱稱
   const [nick, setNick] = useState(() => {
+    if (prefill.name) return prefill.name;
     try { return localStorage.getItem(GUEST_NICK_KEY) || ''; } catch (_) { return ''; }
   });
   const [error, setError] = useState('');
