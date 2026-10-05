@@ -581,7 +581,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 				// Kiro / Codex stream 不含 model，run 前解析並推送。
 				if agentType == agent.TypeKiro || agentType == agent.TypeKiroACP || agentType == agent.TypeCodex {
-					info := model.ResolveForSession(agentType, opts.CliExtraArgs, "", "")
+					info := resolveStreamless(s, agentType)
 					if p := persistInfoUpdate(database, sessionID, info); p != nil {
 						broadcast(serverMsg{Type: "model_update", Model: p})
 					}
@@ -1336,6 +1336,13 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			case "set_model":
 				if err := database.UpdateModel(sessionID, strings.TrimSpace(msg.Model)); err != nil {
 					slog.Info(fmt.Sprintf("[ws] UpdateModel: %v", err))
+				} else if isStreamless(agentType) {
+					// stream 不含 model，不會有人回填 badge；切換當下就要更新。
+					if cur, gerr := database.GetSession(sessionID); gerr == nil {
+						if p := persistInfoUpdate(database, sessionID, resolveStreamless(cur, agentType)); p != nil {
+							broadcast(serverMsg{Type: "model_update", Model: p})
+						}
+					}
 				}
 				broadcast(serverMsg{Type: "status", Value: idleUIStatus(database, sessionID)})
 				slog.Info(fmt.Sprintf("[ws] model: %v", msg.Model))
