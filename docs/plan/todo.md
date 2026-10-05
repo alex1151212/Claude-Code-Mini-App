@@ -25,6 +25,7 @@
 - [x] 臨時共享聊天室：PIN + 連結 + 暱稱，讓朋友限時加入同一聊天室協作；實機驗證待補（見 [紀錄](done/share-chat.md)）
 - [ ] 共享聊天室實機驗證：snapshot 橫幅、到期前 5 分鐘提示、editor 實際送訊息、非內網 IP 帶 guest token 的存取測試
 - [ ] 共享聊天室對外開放：Cloudflare Tunnel 設定；評估 `auth.RealIP` 只在直連來源為本機／內網時才信任 `CF-Connecting-IP`／`X-Forwarded-For`
+- [ ] Telegram 改為可選模組：`bot_token` 可留空、關閉空 key 的 `initData` 驗證、`RealIP` 只信任已知代理（見 [計劃](todo/telegram-optional.md)）
 - [ ] 支援更多 AI 工具 (例如 OpenAI o1, deepseek 等，若有 CLI)
 - [ ] 檔案總管功能 (瀏覽 work_dir 檔案)
 - [ ] 系統資源監控 (CPU/Memory 狀態)
