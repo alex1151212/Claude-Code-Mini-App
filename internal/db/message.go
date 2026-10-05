@@ -21,14 +21,16 @@ type Message struct {
 	ResultText    string       `json:"result_text,omitempty"` // stream-json 最終 result 行文字（若有）；複製時優先
 	Status        string       `json:"status"`
 	CreatedAt     string       `json:"created_at"`
+	Author        string       `json:"author,omitempty"` // 說話者；空字串＝擁有者
 	AttachmentIDs []string     `json:"-"`
 	Attachments   []Attachment `json:"attachments,omitempty"`
 }
 
-func (db *DB) AddMessage(sessionID, role, content string) error {
+// AddMessage 寫入一則已完成的訊息；author 為說話者暱稱，空字串代表擁有者。
+func (db *DB) AddMessage(sessionID, role, content, author string) error {
 	_, err := db.Exec(
-		`INSERT INTO messages (session_id, role, content, status) VALUES (?, ?, ?, ?)`,
-		sessionID, role, content, MessageStatusDone,
+		`INSERT INTO messages (session_id, role, content, status, author) VALUES (?, ?, ?, ?, ?)`,
+		sessionID, role, content, MessageStatusDone, author,
 	)
 	return err
 }
@@ -160,6 +162,8 @@ type MessageQuery struct {
 	AfterID       int64
 	Limit         int
 	IncludeResult bool
+	// MaxID 非 nil 時只回 id <= *MaxID 的訊息（快照分享用；0 代表一則都不給）。
+	MaxID *int64
 }
 
 func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
@@ -167,8 +171,12 @@ func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
 	if q.IncludeResult {
 		resultCol = `COALESCE(result_text, '')`
 	}
-	inner := `SELECT id, session_id, role, content, status, created_at, ` + resultCol + ` AS result_text, attachment_ids FROM messages WHERE session_id = ?`
+	inner := `SELECT id, session_id, role, content, status, created_at, ` + resultCol + ` AS result_text, attachment_ids, author FROM messages WHERE session_id = ?`
 	args := []any{q.SessionID}
+	if q.MaxID != nil {
+		inner += ` AND id <= ?`
+		args = append(args, *q.MaxID)
+	}
 	if q.Since != "" {
 		inner += ` AND created_at >= ?`
 		args = append(args, q.Since)
@@ -206,7 +214,7 @@ func (db *DB) ListMessagesQuery(q MessageQuery) ([]*Message, error) {
 	for rows.Next() {
 		var m Message
 		var ids string
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Status, &m.CreatedAt, &m.ResultText, &ids); err != nil {
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.Status, &m.CreatedAt, &m.ResultText, &ids, &m.Author); err != nil {
 			return nil, err
 		}
 		m.AttachmentIDs, err = decodeAttachmentIDs(ids)

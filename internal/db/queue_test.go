@@ -13,9 +13,9 @@ func TestQueue_FIFOPauseAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a, _ := database.EnqueueMessage(s.ID, "a")
-	b, _ := database.EnqueueMessage(s.ID, "b")
-	if _, err := database.EnqueueMessage(s.ID, "c"); err != nil {
+	a, _ := database.EnqueueMessage(s.ID, "a", "")
+	b, _ := database.EnqueueMessage(s.ID, "b", "")
+	if _, err := database.EnqueueMessage(s.ID, "c", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.DeleteQueuedMessage("other-session", b.ID); err != nil {
@@ -53,7 +53,7 @@ func TestQueue_FIFOPauseAndDelete(t *testing.T) {
 		t.Fatal("空佇列不應暫停")
 	}
 	_ = database.SetQueuePaused(s.ID, true)
-	_, _ = database.EnqueueMessage(s.ID, "new batch")
+	_, _ = database.EnqueueMessage(s.ID, "new batch", "")
 	if p, _ := database.QueuePaused(s.ID); p {
 		t.Fatal("空佇列入列應解除暫停")
 	}

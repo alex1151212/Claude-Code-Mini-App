@@ -119,6 +119,8 @@ type serverMsg struct {
 	Model        *model.Payload     `json:"model,omitempty"`
 	Queue        []db.QueuedMessage `json:"queue,omitempty"`
 	QueuePaused  bool               `json:"queue_paused,omitempty"`
+	Author       string             `json:"author,omitempty"` // 說話者暱稱；空字串＝擁有者。presence 事件中為事件主角
+	Online       []string           `json:"online,omitempty"` // presence：目前在線名單
 }
 
 type shellPendingPayload struct {
@@ -141,11 +143,35 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 		sessionID := c.Params("id")
 		tgUserID, _ := c.Locals("tg_id").(int64)
 
+		// 訪客身分由 authMiddleware 寫入 Locals；擁有者沒有這些值。訪客一律沒有 tg_id，不觸發 Telegram 通知。
+		shareID, _ := c.Locals("share_id").(int64)
+		isGuest := shareID != 0
+		guestNick, _ := c.Locals("share_nickname").(string)
+		guestRole, _ := c.Locals("share_role").(string)
+		guestMode, _ := c.Locals("share_mode").(string)
+		guestExpires, _ := c.Locals("share_expires_at").(time.Time)
+		author := "" // 本連線送出的訊息署名；空字串＝擁有者
+		// 角色在後端強制：訪客除 editor 外一律唯讀（未知角色也視為唯讀）。
+		readOnly := isGuest && guestRole != db.ShareRoleEditor
+		if isGuest {
+			tgUserID = 0
+			author = guestNick
+		}
+
 		sess, err := database.GetSession(sessionID)
 		if err != nil {
 			slog.Info(fmt.Sprintf("[ws] session %s missing: %v", sessionID, err))
 			c.Close()
 			return
+		}
+		if isGuest {
+			// 縱深防禦：snapshot 不該走到這裡；連線瞬間分享可能剛被結束或到期，再確認一次。
+			sh, err := database.GetShare(shareID)
+			if guestMode == db.ShareModeSnapshot || err != nil || !sh.Active(time.Now()) || sh.SessionID != sessionID || guestNick == "" {
+				slog.Info(fmt.Sprintf("[ws] 拒絕訪客連線 share=%d session=%s", shareID, sessionID))
+				c.Close()
+				return
+			}
 		}
 		slog.Info(fmt.Sprintf("[ws] session %s connected (agent=%s agentSessionID=%q mode=%s)", sessionID, sess.AgentType, sess.AgentSessionID, sess.PermissionMode))
 		defer slog.Info(fmt.Sprintf("[ws] session %s disconnected", sessionID))
@@ -169,6 +195,24 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 		unsub := hub.Subscribe(sessionID, send)
 		defer unsub()
+
+		// 在線名單登記；訪客另有 kick（結束分享）與到期 timer。
+		entry := &connEntry{sessionID: sessionID, shareID: shareID, nickname: guestNick}
+		entry.kick = func(reason string) {
+			send(serverMsg{Type: "share_ended", Content: reason})
+			_ = c.WriteControl(fiberws.CloseMessage, fiberws.FormatCloseMessage(4001, "share ended"), time.Now().Add(time.Second))
+			c.Close()
+		}
+		removePresence := presenceAdd(entry)
+		if isGuest {
+			slog.Info(fmt.Sprintf("[ws] 訪客 %q 連線 share=%d role=%s", guestNick, shareID, guestRole))
+			expiry := time.AfterFunc(time.Until(guestExpires), func() { entry.kick(shareEndExpired) })
+			defer expiry.Stop()
+		}
+		defer func() {
+			removePresence()
+			announcePresence(sessionID, "leave", entry.displayName(), isGuest)
+		}()
 
 		broadcast := func(msg serverMsg) {
 			hub.Broadcast(sessionID, msg)
@@ -195,6 +239,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 		syncMsg.Model = sessionModelPayload(sess)
 		syncMsg.Queue, syncMsg.QueuePaused = loadQueueState(database, sessionID)
 		send(syncMsg)
+		announcePresence(sessionID, "join", entry.displayName(), isGuest)
 
 		// 進入會話時若 quota cache 已過期，背景補打一次並推播更新（cache 未過期則 RefreshAfterRun 內部直接跳過）。
 		if quotaSvc != nil {
@@ -246,10 +291,10 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			}
 			clearInMemoryShellApproval(sessionID)
 
-			if err := database.AddMessage(sessionID, "user", command); err != nil {
+			if err := database.AddMessage(sessionID, "user", command, author); err != nil {
 				slog.Info(fmt.Sprintf("[ws] shell AddMessage: %v", err))
 			}
-			broadcast(serverMsg{Type: "user_message", Content: command})
+			broadcast(serverMsg{Type: "user_message", Content: command, Author: author})
 
 			msgID, err := database.CreatePendingMessageWithRole(sessionID, db.RoleShell)
 			if err != nil {
@@ -714,16 +759,25 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			if err != nil {
 				return err
 			}
+			// 排隊訊息保留原送出者（可能是別條連線、別人排的），其餘用本連線身分。
+			who := author
+			if queued != nil {
+				who = queued.Author
+			}
+			// 訪客訊息送給 agent 前加 [暱稱] 前綴，agent 才分得出是誰在說話。
+			if who != "" {
+				prompt = "[" + who + "] " + prompt
+			}
 			var m *db.Message
 			if queued != nil {
 				m, err = database.PromoteQueuedMessage(sessionID, *queued)
 			} else {
-				m, err = database.AddUserMessageWithAttachments(sessionID, input.Data, input.AttachmentIDs)
+				m, err = database.AddUserMessageWithAttachments(sessionID, input.Data, who, input.AttachmentIDs)
 			}
 			if err != nil {
 				return err
 			}
-			broadcast(serverMsg{Type: "user_message", ID: m.ID, Content: m.Content, CreatedAt: m.CreatedAt, Attachments: m.Attachments})
+			broadcast(serverMsg{Type: "user_message", ID: m.ID, Content: m.Content, CreatedAt: m.CreatedAt, Attachments: m.Attachments, Author: m.Author})
 			if input.RequestID != "" {
 				send(serverMsg{Type: "input_accepted", RequestID: input.RequestID})
 			}
@@ -799,7 +853,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			}
 			if agentBusy(s) || queueHasItems() {
 				// 佇列還有東西（例如失敗後暫停）時也要排到尾端，否則閒置時的新 input 會插隊到舊項目前面。
-				if _, err := database.EnqueueMessage(sessionID, input.Data, input.AttachmentIDs...); err != nil {
+				if _, err := database.EnqueueMessage(sessionID, input.Data, author, input.AttachmentIDs...); err != nil {
 					slog.Info(fmt.Sprintf("[ws] EnqueueMessage: %v", err))
 					reject(err)
 					return
@@ -972,10 +1026,10 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 					broadcast(serverMsg{Type: "error", Content: err.Error()})
 					return
 				}
-				if err := database.AddMessage(sessionID, "user", line); err != nil {
+				if err := database.AddMessage(sessionID, "user", line, author); err != nil {
 					slog.Info(fmt.Sprintf("[ws] 儲存 user 訊息 (shell confirm) 失敗: %v", err))
 				}
-				broadcast(serverMsg{Type: "user_message", Content: line})
+				broadcast(serverMsg{Type: "user_message", Content: line, Author: author})
 				if err := database.UpdateShellPending(sessionID, string(b)); err != nil {
 					slog.Info(fmt.Sprintf("[ws] UpdateShellPending: %v", err))
 					broadcast(serverMsg{Type: "error", Content: err.Error()})
@@ -992,10 +1046,10 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				return
 			}
 
-			if err := database.AddMessage(sessionID, "user", line); err != nil {
+			if err := database.AddMessage(sessionID, "user", line, author); err != nil {
 				slog.Info(fmt.Sprintf("[ws] 儲存 user 訊息 (shell) 失敗: %v", err))
 			}
-			broadcast(serverMsg{Type: "user_message", Content: line})
+			broadcast(serverMsg{Type: "user_message", Content: line, Author: author})
 
 			startShellGoroutine(line, absDir)
 		}
@@ -1060,6 +1114,17 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 			var msg clientMsg
 			if err := json.Unmarshal(raw, &msg); err != nil {
+				continue
+			}
+
+			if msg.Type == "ping" {
+				send(serverMsg{Type: "pong"})
+				continue
+			}
+			// 唯讀訪客（viewer）：除 ping 外一律丟棄並回錯誤事件，不進入任何處理。角色由後端強制。
+			if readOnly {
+				slog.Info(fmt.Sprintf("[ws] 丟棄唯讀訪客 %q 的 %q 指令 (share=%d)", guestNick, msg.Type, shareID))
+				send(serverMsg{Type: "error", Content: "唯讀分享，無法執行此操作"})
 				continue
 			}
 
@@ -1173,10 +1238,6 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 					broadcast(serverMsg{Type: "error", Content: "請先處理待確認的 Shell 指令"})
 					continue
 				}
-				clearPendingDenials(database, sessionID)
-				if err := database.UpdateAllowedTools(sessionID, nil); err != nil {
-					slog.Info(fmt.Sprintf("[ws] UpdateAllowedTools: %v", err))
-				}
 				once := make([]string, 0, len(msg.Tools))
 				for _, t := range msg.Tools {
 					t = strings.TrimSpace(t)
@@ -1187,6 +1248,14 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				if len(once) == 0 {
 					slog.Info(fmt.Sprintf("[ws] allow_once: empty tools"))
 					continue
+				}
+				// 多人同時回應同一個授權時先到先贏：認領 pending_denials 成功者才繼續，其餘視為已處理。
+				if claimed, err := database.ClaimPendingDenials(sessionID); err != nil || !claimed {
+					slog.Info(fmt.Sprintf("[ws] allow_once 略過：授權已被處理或不存在 (err=%v)", err))
+					continue
+				}
+				if err := database.UpdateAllowedTools(sessionID, nil); err != nil {
+					slog.Info(fmt.Sprintf("[ws] UpdateAllowedTools: %v", err))
 				}
 				runAgent("please retry the previous operation", once)
 
@@ -1202,7 +1271,11 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 					}
 					continue
 				}
-				clearPendingDenials(database, sessionID)
+				// 先到先贏：同 allow_once，已被另一端處理就不再重跑。
+				if claimed, err := database.ClaimPendingDenials(sessionID); err != nil || !claimed {
+					slog.Info(fmt.Sprintf("[ws] deny_once 略過：授權已被處理或不存在 (err=%v)", err))
+					continue
+				}
 				// 使用者拒絕代表計畫被打斷，後面排隊的不自動接著跑。
 				pauseQueue()
 				runAgent("[Permission denied by user. Please acknowledge that you cannot perform the requested operation and stop.]", nil)

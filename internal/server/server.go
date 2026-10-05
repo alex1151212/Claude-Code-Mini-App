@@ -209,6 +209,10 @@ func Start(ctx context.Context) (*Server, error) {
 
 	authMiddleware := func(c *fiber.Ctx) error {
 		if cfg.NoAuth {
+			// no_auth 下帶訪客 token 的請求仍須受角色／範圍限制，否則開發時無法驗證訪客模式。
+			if t := guestToken(c); t != "" {
+				return guestAuth(database, c, t)
+			}
 			return c.Next()
 		}
 
@@ -233,6 +237,12 @@ func Start(ctx context.Context) (*Server, error) {
 			slog.Debug("[auth] TG 驗證通過", "tg_id", user.ID, "username", user.Username)
 			c.Locals("tg_id", user.ID)
 			return c.Next()
+		}
+
+		// 臨時分享的訪客（guest token）：在 TG 驗證之後、內網 IP 檢查之前；訪客來自外網，不受內網限制，
+		// 改由 guestAuth 做 token 有效性（撤銷／到期）與路由範圍檢查。
+		if t := guestToken(c); t != "" {
+			return guestAuth(database, c, t)
 		}
 
 		if cfg.McpToken != "" {
@@ -262,7 +272,9 @@ func Start(ctx context.Context) (*Server, error) {
 		return c.Next()
 	}
 
+	shareH := api.NewShareHandler(database, api.ShareHooks{Kick: ws.KickShare, Online: ws.ShareOnline}, "./internal/static")
 	sh := api.NewSessionHandler(database)
+	sh.OnSharesRevoked = shareH.KickAll
 	app.Get("/sessions", authMiddleware, sh.List)
 	app.Post("/sessions", authMiddleware, sh.Create)
 	app.Post("/sessions/read-all", authMiddleware, sh.ReadAll)
@@ -275,6 +287,16 @@ func Start(ctx context.Context) (*Server, error) {
 		return c.JSON(fiber.Map{"failed": syncModelOptions(database)})
 	})
 	app.Get("/work-dirs", authMiddleware, sh.ListWorkDirs)
+
+	// 臨時共享聊天室：擁有者端走 authMiddleware；訪客加入頁與 join 不需驗證（join 靠 PIN＋限流＋鎖定）。
+	app.Post("/sessions/:id/shares", authMiddleware, shareH.Create)
+	app.Get("/sessions/:id/shares", authMiddleware, shareH.ListBySession)
+	app.Get("/shares", authMiddleware, shareH.ListAll)
+	app.Delete("/shares/:id", authMiddleware, shareH.Revoke)
+	app.Delete("/shares", authMiddleware, shareH.RevokeAll)
+	app.Get("/guest/me", authMiddleware, shareH.Me)
+	app.Get("/share/:token", shareH.Page)
+	app.Post("/share/:token/join", api.JoinLimiter(), shareH.Join)
 
 	sth := api.NewSettingsHandler(database)
 	app.Get("/settings/appearance", authMiddleware, sth.GetAppearance)

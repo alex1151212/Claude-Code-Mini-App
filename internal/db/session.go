@@ -120,6 +120,10 @@ func (db *DB) DeleteSession(id string) error {
 	if _, err := db.Exec(`DELETE FROM attachments WHERE session_id = ?`, id); err != nil {
 		return err
 	}
+	// 分享綁定的聊天室已不存在，一併結束（記錄保留供列表顯示「已結束」）。
+	if _, err := db.RevokeSharesBySession(id); err != nil {
+		return err
+	}
 	_, err := db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 	return err
 }
@@ -186,6 +190,17 @@ func (db *DB) UpdatePendingDenials(id, denials string) error {
 		denials, id,
 	)
 	return err
+}
+
+// ClaimPendingDenials 原子地「認領」待授權請求：pending_denials 非空才清空並回傳 true。
+// 多人（擁有者與訪客）同時回應授權時，只有第一個會拿到 true，其餘視為已被處理。
+func (db *DB) ClaimPendingDenials(id string) (bool, error) {
+	res, err := db.Exec(`UPDATE sessions SET pending_denials = '' WHERE id = ? AND pending_denials != ''`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func (db *DB) UpdateAllowedTools(id string, tools []string) error {

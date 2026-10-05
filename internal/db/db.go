@@ -95,6 +95,28 @@ func (db *DB) migrate() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
 		CREATE INDEX IF NOT EXISTS idx_attachments_session ON attachments (session_id);
+		CREATE TABLE IF NOT EXISTS shares (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id      TEXT    NOT NULL,
+			token           TEXT    NOT NULL UNIQUE,
+			pin             TEXT    NOT NULL,
+			role            TEXT    NOT NULL,
+			mode            TEXT    NOT NULL,
+			snapshot_msg_id INTEGER,
+			expires_at      TEXT    NOT NULL,
+			revoked         INTEGER NOT NULL DEFAULT 0,
+			failed_attempts INTEGER NOT NULL DEFAULT 0,
+			created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_shares_session ON shares (session_id);
+		CREATE TABLE IF NOT EXISTS share_guests (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			share_id   INTEGER NOT NULL,
+			nickname   TEXT    NOT NULL,
+			token      TEXT    NOT NULL UNIQUE,
+			created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_share_guests_share ON share_guests (share_id);
 	`)
 	if err != nil {
 		return err
@@ -145,6 +167,9 @@ func (db *DB) migrate() error {
 	tryAlter(`ALTER TABLE sessions ADD COLUMN last_read_at TEXT NOT NULL DEFAULT ''`)
 	// queue_paused：上一個任務失敗／中斷時佇列暫停，需使用者手動繼續。
 	tryAlter(`ALTER TABLE sessions ADD COLUMN queue_paused INTEGER NOT NULL DEFAULT 0`)
+	// author：訊息說話者。空字串＝擁有者（含舊資料），訪客為其暱稱。
+	tryAlter(`ALTER TABLE messages ADD COLUMN author TEXT NOT NULL DEFAULT ''`)
+	tryAlter(`ALTER TABLE queued_messages ADD COLUMN author TEXT NOT NULL DEFAULT ''`)
 
 	// 既有 session 的 work_dir 補進目錄清單
 	if err := db.seedWorkDirsFromSessions(); err != nil {

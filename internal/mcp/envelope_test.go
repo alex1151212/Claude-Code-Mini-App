@@ -97,7 +97,7 @@ func TestPrepareConsultHopChain(t *testing.T) {
 	b, _ := database.CreateSession("B", "", "/tmp/b", "default", "codex", nil, "agent")
 	d := &deps{db: database, maxHops: 3}
 
-	if err := database.AddMessage(a.ID, "user", "人類：去問 B"); err != nil {
+	if err := database.AddMessage(a.ID, "user", "人類：去問 B", ""); err != nil {
 		t.Fatal(err)
 	}
 	from, to := a, b
@@ -109,7 +109,7 @@ func TestPrepareConsultHopChain(t *testing.T) {
 		if !strings.Contains(text, "hop: "+string(rune('0'+hop))) {
 			t.Fatalf("hop %d envelope:\n%s", hop, text)
 		}
-		_ = database.AddMessage(to.ID, "user", text) // 模擬對方收到
+		_ = database.AddMessage(to.ID, "user", text, "") // 模擬對方收到
 		from, to = to, from
 	}
 	if _, err := d.prepareConsult(to.ID, from.ID, "msg", consultAsync); err == nil {
@@ -117,7 +117,7 @@ func TestPrepareConsultHopChain(t *testing.T) {
 	}
 
 	// 人插話後歸零
-	_ = database.AddMessage(from.ID, "user", "人類：好，再問一次")
+	_ = database.AddMessage(from.ID, "user", "人類：好，再問一次", "")
 	if _, err := d.prepareConsult(to.ID, from.ID, "msg", consultAsync); err != nil {
 		t.Fatalf("人插話後應重新計數: %v", err)
 	}

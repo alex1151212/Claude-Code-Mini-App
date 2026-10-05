@@ -43,6 +43,8 @@ func normalizeCliExtraArgs(in []string) ([]string, error) {
 
 type SessionHandler struct {
 	db *db.DB
+	// OnSharesRevoked 在刪除 session 而撤銷其分享後呼叫（用來踢掉訪客連線）；可為 nil。
+	OnSharesRevoked func(shareIDs []int64)
 }
 
 func NewSessionHandler(database *db.DB) *SessionHandler {
@@ -215,6 +217,9 @@ func (h *SessionHandler) Patch(c *fiber.Ctx) error {
 
 func (h *SessionHandler) Delete(c *fiber.Ctx) error {
 	id := c.Params("id")
+	if shareIDs, err := h.db.RevokeSharesBySession(id); err == nil && len(shareIDs) > 0 && h.OnSharesRevoked != nil {
+		h.OnSharesRevoked(shareIDs)
+	}
 	if err := h.db.DeleteSession(id); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -231,7 +236,12 @@ func (h *SessionHandler) ReadAll(c *fiber.Ctx) error {
 
 func (h *SessionHandler) Messages(c *fiber.Ctx) error {
 	id := c.Params("id")
-	msgs, err := h.db.ListMessages(id)
+	q := db.MessageQuery{SessionID: id, IncludeResult: true}
+	// 快照分享的訪客（authMiddleware 寫入）只能讀到 snapshot_msg_id 為止。
+	if maxID, ok := c.Locals("share_snapshot_msg_id").(int64); ok {
+		q.MaxID = &maxID
+	}
+	msgs, err := h.db.ListMessagesQuery(q)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}

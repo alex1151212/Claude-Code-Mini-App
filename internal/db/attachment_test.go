@@ -22,10 +22,10 @@ func TestAttachmentHistoryQueueAndReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := database.AddUserMessageWithAttachments(s.ID, "read these", []string{"second", "first"}); err != nil {
+	if _, err := database.AddUserMessageWithAttachments(s.ID, "read these", "", []string{"second", "first"}); err != nil {
 		t.Fatal(err)
 	}
-	q, err := database.EnqueueMessage(s.ID, "", "first")
+	q, err := database.EnqueueMessage(s.ID, "", "", "first")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,14 +84,14 @@ func TestAttachmentRejectsWrongSessionAndRollsBackPromotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ids := range [][]string{{"unknown"}, {"file", "file"}} {
-		if _, err := database.AddUserMessageWithAttachments(s.ID, "text", ids); err == nil {
+		if _, err := database.AddUserMessageWithAttachments(s.ID, "text", "", ids); err == nil {
 			t.Fatalf("accepted invalid IDs: %v", ids)
 		}
 	}
-	if _, err := database.EnqueueMessage("other-session", "text", "file"); err == nil {
+	if _, err := database.EnqueueMessage("other-session", "text", "", "file"); err == nil {
 		t.Fatal("accepted cross-session attachment")
 	}
-	q, err := database.EnqueueMessage(s.ID, "queued", "file")
+	q, err := database.EnqueueMessage(s.ID, "queued", "", "file")
 	if err != nil {
 		t.Fatal(err)
 	}

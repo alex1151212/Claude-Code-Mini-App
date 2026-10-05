@@ -72,6 +72,7 @@ func buildSyncPayload(database *db.DB, sessionID string) (SyncPayload, error) {
 		ResultText  string          `json:"result_text,omitempty"`
 		Status      string          `json:"status"`
 		CreatedAt   string          `json:"created_at,omitempty"`
+		Author      string          `json:"author,omitempty"`
 		Attachments []db.Attachment `json:"attachments,omitempty"`
 	}
 	out := make([]row, 0, len(msgs))
@@ -82,7 +83,7 @@ func buildSyncPayload(database *db.DB, sessionID string) (SyncPayload, error) {
 		}
 		out = append(out, row{
 			ID: m.ID, Role: m.Role, Content: m.Content, ResultText: m.ResultText,
-			Status: st, CreatedAt: m.CreatedAt, Attachments: m.Attachments,
+			Status: st, CreatedAt: m.CreatedAt, Author: m.Author, Attachments: m.Attachments,
 		})
 	}
 	raw, err := json.Marshal(out)

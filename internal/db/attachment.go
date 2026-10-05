@@ -100,16 +100,17 @@ func hydrateAttachments(ids []string, all map[string]Attachment) []Attachment {
 	return out
 }
 
-func (db *DB) AddUserMessageWithAttachments(sessionID, content string, ids []string) (*Message, error) {
-	return db.saveUserMessage(sessionID, content, ids, 0)
+// AddUserMessageWithAttachments 寫入 user 訊息；author 為說話者暱稱，空字串代表擁有者。
+func (db *DB) AddUserMessageWithAttachments(sessionID, content, author string, ids []string) (*Message, error) {
+	return db.saveUserMessage(sessionID, content, author, ids, 0)
 }
 
 // PromoteQueuedMessage moves a queue item into history in one transaction.
 func (db *DB) PromoteQueuedMessage(sessionID string, q QueuedMessage) (*Message, error) {
-	return db.saveUserMessage(sessionID, q.Content, q.AttachmentIDs, q.ID)
+	return db.saveUserMessage(sessionID, q.Content, q.Author, q.AttachmentIDs, q.ID)
 }
 
-func (db *DB) saveUserMessage(sessionID, content string, ids []string, queueID int64) (*Message, error) {
+func (db *DB) saveUserMessage(sessionID, content, author string, ids []string, queueID int64) (*Message, error) {
 	attachments, err := db.ResolveAttachments(sessionID, ids)
 	if err != nil {
 		return nil, err
@@ -129,8 +130,8 @@ func (db *DB) saveUserMessage(sessionID, content string, ids []string, queueID i
 			return nil, fmt.Errorf("排隊訊息已變更或不存在")
 		}
 	}
-	res, err := tx.Exec(`INSERT INTO messages (session_id, role, content, status, attachment_ids) VALUES (?, 'user', ?, ?, ?)`,
-		sessionID, content, MessageStatusDone, attachmentIDsJSON(ids))
+	res, err := tx.Exec(`INSERT INTO messages (session_id, role, content, status, attachment_ids, author) VALUES (?, 'user', ?, ?, ?, ?)`,
+		sessionID, content, MessageStatusDone, attachmentIDsJSON(ids), author)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +139,7 @@ func (db *DB) saveUserMessage(sessionID, content string, ids []string, queueID i
 	if err != nil {
 		return nil, err
 	}
-	m := &Message{ID: id, SessionID: sessionID, Role: "user", Content: content, Status: MessageStatusDone, AttachmentIDs: ids, Attachments: attachments}
+	m := &Message{ID: id, SessionID: sessionID, Role: "user", Content: content, Status: MessageStatusDone, Author: author, AttachmentIDs: ids, Attachments: attachments}
 	if err := tx.QueryRow(`SELECT created_at FROM messages WHERE id = ?`, id).Scan(&m.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -146,4 +147,12 @@ func (db *DB) saveUserMessage(sessionID, content string, ids []string, queueID i
 		return nil, err
 	}
 	return m, nil
+}
+
+// AttachmentInSnapshot 回報附件是否被 id <= maxMsgID 的訊息引用（快照分享只能讀這些附件）。
+func (db *DB) AttachmentInSnapshot(sessionID, attachmentID string, maxMsgID int64) (bool, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM messages m, json_each(m.attachment_ids) j
+		WHERE m.session_id = ? AND m.id <= ? AND j.value = ?`, sessionID, maxMsgID, attachmentID).Scan(&n)
+	return n > 0, err
 }
