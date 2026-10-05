@@ -168,7 +168,7 @@ function MessageAttachmentCard({ attachment: a, onPreview }) {
       </div>
       <div className="mt-2 flex flex-wrap gap-3 text-[11px]">
         {!a.legacy && <button type="button" onClick={download} disabled={busy} className="hover:underline disabled:opacity-40">{busy ? '讀取中…' : '下載'}</button>}
-        <button type="button" onClick={showDetails} disabled={busy} className="text-white/70 hover:underline disabled:opacity-40">{details ? '收起詳細資訊' : '附件詳細資訊'}</button>
+        {!isGuestMode && <button type="button" onClick={showDetails} disabled={busy} className="text-white/70 hover:underline disabled:opacity-40">{details ? '收起詳細資訊' : '附件詳細資訊'}</button>}
         {error && isImage && <button type="button" onClick={() => { setError(''); setRetry(n => n + 1); }} className="hover:underline">重試預覽</button>}
       </div>
       {error && <div role="status" className="mt-1 text-[11px] text-red-200">{error}</div>}

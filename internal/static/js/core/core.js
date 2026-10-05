@@ -23,6 +23,41 @@ if (isTMA) {
 /** Web 登入 session token（localStorage；後端仍驗證於伺服器端 store） */
 const WEB_SESSION_STORAGE_KEY = 'cc_web_session_token';
 
+// ── 分享（訪客）模式 ──────────────────────────────────────────────────────────
+// 網址為 /share/<token> 時進入訪客模式：不走 TG / 密碼登入，只帶 join 後取得的 guest token（X-Share-Token）。
+// guest token 存 sessionStorage（關閉分頁即失效），以分享 token 為 key，避免同分頁開不同分享互相覆蓋。
+const SHARE_TOKEN_FROM_URL = (() => {
+  const m = (window.location.pathname || '').match(/\/share\/([^/]+)\/?$/);
+  return m ? decodeURIComponent(m[1]) : '';
+})();
+const isGuestMode = SHARE_TOKEN_FROM_URL !== '';
+const GUEST_STORAGE_KEY = `cc_guest_v1:${SHARE_TOKEN_FROM_URL}`;
+
+/** 取得已儲存的訪客資料 { guest_token, nickname, role, mode, ... }；沒有回 null。 */
+function readGuestAuth() {
+  try {
+    const raw = sessionStorage.getItem(GUEST_STORAGE_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    return v && v.guest_token ? v : null;
+  } catch (_) {
+    return null;
+  }
+}
+function saveGuestAuth(payload) {
+  try { sessionStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(payload)); } catch (_) {}
+}
+function clearGuestAuth() {
+  try { sessionStorage.removeItem(GUEST_STORAGE_KEY); } catch (_) {}
+}
+function guestTokenValue() {
+  const a = readGuestAuth();
+  return a ? a.guest_token : '';
+}
+
+/** 訪客的分享已結束（401）時通知 GuestApp 切到「分享已結束」畫面。 */
+let onGuestEnded = null;
+const registerGuestEndedHandler = (fn) => { onGuestEnded = fn; };
+
 /** 桌面版側欄寬度（localStorage，px；與原 max-w-[48vw] 上限一致） */
 const SIDEBAR_WIDTH_STORAGE_KEY = 'cc_sidebar_width_px';
 const SIDEBAR_WIDTH_DEFAULT = 340;
@@ -285,6 +320,8 @@ function inferApiBaseFromPathname() {
     p = p.replace(/\/[^/]+\.html$/i, '');
   }
   p = p.replace(/\/+$/, '');
+  // 分享連結 /<前綴>/share/<token>：API 前綴是 /share/<token> 之前的部分。
+  p = p.replace(/\/share\/[^/]+$/i, '');
   p = p.replace(/\/nexus$/i, '').replace(/\/focus$/i, '').replace(/\/enterprise$/i, '').replace(/\/remoteagent$/i, '').replace(/\/v1$/i, '');
   p = p.replace(/\/+$/, '');
   if (p === '' || p === '/') return '';
@@ -338,6 +375,14 @@ const clearWebSession = () => {
 };
 
 const handleUnauthorized = (res) => {
+  if (isGuestMode) {
+    // 訪客：401 代表分享已結束／撤銷／到期。不可呼叫 clearWebSession（那是擁有者的登入）。
+    if (res.status === 401) {
+      onGuestEnded?.();
+      return true;
+    }
+    return false;
+  }
   if (!isTelegram && res.status === 401) {
     clearWebSession();
     return true;
@@ -348,7 +393,11 @@ const handleUnauthorized = (res) => {
 // 統一 fetch：TMA 帶 initData；Web 帶 Bearer（localStorage），舊版仍相容後端 Cookie
 const apiFetch = async (url, opts = {}) => {
   const headers = { ...(opts.headers || {}) };
-  if (isTelegram) {
+  if (isGuestMode) {
+    // 訪客只帶 guest token，不帶 TG initData 或擁有者的 Bearer。
+    const gt = guestTokenValue();
+    if (gt) headers['X-Share-Token'] = gt;
+  } else if (isTelegram) {
     headers['X-Telegram-Init-Data'] = initData;
   } else {
     try {
@@ -366,6 +415,10 @@ const wsBaseURL = (path) => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   let url = `${proto}://${location.host}${appPath(path)}`;
   const sep = (u) => (u.includes('?') ? '&' : '?');
+  if (isGuestMode) {
+    const gt = guestTokenValue();
+    return gt ? `${url}${sep(url)}share=${encodeURIComponent(gt)}` : url;
+  }
   if (isTelegram) {
     return `${url}${sep(url)}initData=${encodeURIComponent(initData)}`;
   }
@@ -486,6 +539,8 @@ function useMediaQuery(query) {
 let _serverConfigPromise = null;
 function fetchServerConfig() {
   if (!_serverConfigPromise) {
+    // 訪客沒有 /config 的存取權（也不該看到伺服器本機功能）。
+    if (isGuestMode) return Promise.resolve({});
     _serverConfigPromise = apiFetch('/config')
       .then((res) => (res.ok ? res.json() : {}))
       .catch(() => ({}));

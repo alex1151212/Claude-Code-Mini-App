@@ -2,7 +2,14 @@
  * ChatView 的 WebSocket 生命週期 + 串流解析 + 訊息／設定狀態。
  * 從 ChatView.js 抽出（原本塞在元件裡的 330 行 init effect）。
  */
-function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelect }) {
+function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelect, guest = null }) {
+  // 分享訪客：{ nickname, role, mode, ... }；null＝擁有者。snapshot 模式只讀歷史、不連 WS。
+  const isGuest = !!guest;
+  const guestSnapshot = isGuest && guest.mode === 'snapshot';
+  const [online, setOnline] = useState([]);
+  /** 分享被結束／到期時的原因（revoked / expired）；有值就不再重連 */
+  const [shareEnded, setShareEnded] = useState('');
+  const shareEndedRef = useRef('');
   const [messages, setMessages]   = useState([]);
   const [state, setState]         = useState('IDLE');
   const [permTools, setPermTools] = useState([]);
@@ -47,6 +54,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     setMessages([]);
     setHistLoaded(false);
     setState('IDLE');
+    setOnline([]);
     setPermTools([]);
     setShellRequest(null);
     setQueue([]);
@@ -99,14 +107,15 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
         console.warn('[messages] load error', err);
       }
       if (isCurrent()) {
-        setMessages(hist.map(mapMessageRow));
+        // snapshot：截止當下可能還有一則進行中的回覆，但之後不會再更新，不顯示串流動畫。
+        setMessages(hist.map(mapMessageRow).map((r) => (guestSnapshot ? { ...r, streaming: false } : r)));
         const lastClaude = [...hist].reverse().find((m) => m.role === 'claude' && m.status === 'pending');
         streamBuf.current = lastClaude ? (lastClaude.content || '') : '';
         setHistLoaded(true);
       }
 
-      // 建立 WebSocket
-      connectWS();
+      // 建立 WebSocket（snapshot 分享沒有即時連線，只讀上面載入的歷史）
+      if (!guestSnapshot) connectWS();
     };
 
     const connectWS = () => {
@@ -120,6 +129,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
 
       // 使用者正在看這個 session：標記已讀，讓列表未讀點消失。失敗不影響聊天功能，靜默忽略。
       const markRead = () => {
+        if (isGuest) return; // 訪客沒有「已讀」概念，PATCH 也會被後端擋下
         apiFetch(`/sessions/${session.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -135,6 +145,23 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
       ws.onmessage = (evt) => {
         if (!isCurrent() || wsRef.current !== ws) return;
         const msg = JSON.parse(evt.data);
+
+        if (msg.type === 'presence') {
+          setOnline(Array.isArray(msg.online) ? msg.online : []);
+          return;
+        }
+
+        if (msg.type === 'share_ended') {
+          // 擁有者結束分享或到期：後端隨後會關閉連線，這裡先記下原因，onclose 就不重連。
+          shareEndedRef.current = msg.content || 'revoked';
+          setShareEnded(shareEndedRef.current);
+          return;
+        }
+
+        if (msg.type === 'error' && isGuest) {
+          showToast(msg.content || '操作失敗', { error: true, duration: 3000 });
+          return;
+        }
 
         if (msg.type === 'input_accepted' || msg.type === 'input_rejected') {
           const request = inputRequestsRef.current.get(msg.request_id);
@@ -423,6 +450,17 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
             connectWS();
           }, 2000);
         };
+        if (isGuest) {
+          // 訪客：分享已結束就不重連；否則先探測 token 是否仍有效（apiFetch 遇 401 會通知 GuestApp 切換畫面）。
+          if (shareEndedRef.current || evt.code === 4001) return;
+          apiFetch('/guest/me').then((res) => {
+            if (!isCurrent() || wsRef.current !== ws) return;
+            if (res.ok) scheduleReconnect();
+          }).catch(() => {
+            if (isCurrent() && wsRef.current === ws) scheduleReconnect();
+          });
+          return;
+        }
         if (!everConnected && !isTelegram) {
           apiFetch('/sessions').then((res) => {
             if (!isCurrent() || wsRef.current !== ws) return;
@@ -484,6 +522,8 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
   }), [send]);
 
   const flushPendingModes = useCallback(() => {
+    // 訪客不改動擁有者的權限／模型／輸入模式設定（UI 也沒有這些控制項）。
+    if (isGuest) return true;
     const wantPerm = normalizePermMode(agentType, mode);
     const wantInput = inputMode === 'shell' || inputMode === 'agent' ? inputMode : 'agent';
     if (showPermModeSelect && wantPerm !== serverPermAppliedRef.current) {
@@ -503,7 +543,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
       serverEffortAppliedRef.current = effortSel;
     }
     return true;
-  }, [send, agentType, mode, inputMode, showPermModeSelect, modelSel, effortSel, showEffortSelect]);
+  }, [send, isGuest, agentType, mode, inputMode, showPermModeSelect, modelSel, effortSel, showEffortSelect]);
 
   const handleQuotaRefresh = useCallback(() => {
     if (quotaRefreshing) return;
@@ -546,5 +586,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     flushPendingModes,
     handleQuotaRefresh,
     commitPermMode,
+    online,
+    shareEnded,
   };
 }

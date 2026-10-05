@@ -1,6 +1,6 @@
 const EMPTY_SUGGESTIONS = ['看一下目前 git 狀態與最近的變更', '概覽這個專案的結構', '跑測試並整理失敗原因'];
 
-function ChatView({ session, onBack, showBack = true, fullHeight = true, usePermModeDropdown = false, onJumpToSession, allSessions }) {
+function ChatView({ session, onBack, showBack = true, fullHeight = true, usePermModeDropdown = false, onJumpToSession, allSessions = [], guest = null }) {
   const jumpToSession = typeof onJumpToSession === 'function' ? onJumpToSession : () => {};
   const agentType = session.agent_type || 'claude';
   // Claude / Cursor / Antigravity 皆支援 mode 切換（Codex 暫無對應概念）
@@ -27,7 +27,19 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     flushPendingModes,
     handleQuotaRefresh,
     commitPermMode,
-  } = useChatSocket({ session, agentType, showPermModeSelect, showEffortSelect });
+    online,
+    shareEnded,
+  } = useChatSocket({ session, agentType, showPermModeSelect, showEffortSelect, guest });
+
+  // ── 分享聊天室 ──
+  // guest 為 null＝擁有者；否則是訪客（viewer 唯讀、editor 可輸入、snapshot 只能看歷史）。
+  const isGuest = !!guest;
+  const isSnapshot = isGuest && guest.mode === 'snapshot';
+  const guestReadOnly = isGuest && (guest.role !== 'editor' || isSnapshot);
+  const canAct = !guestReadOnly; // 可以回應授權／Shell 確認等操作的人
+  const [shareOpen, setShareOpen] = useState(false);
+  const shareRemainingMs = useShareRemaining(isGuest ? guest.expires_at : null);
+  const shareOver = isGuest && (!!shareEnded || (shareRemainingMs != null && shareRemainingMs <= 0));
 
   const [input, setInput]         = useState('');
   const [lightboxSrc, setLightboxSrc] = useState(null);
@@ -271,7 +283,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     }
     setSlashMenuItems([]);
     const hit = mentionQueryAtCursor(value, cursor);
-    if (!hit) {
+    if (!hit || isGuest) { // 訪客看不到其他 session，不提供 @ 標記
+
       setMentionOpen(false);
       setMentionItems([]);
       return;
@@ -648,7 +661,11 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         effortSel={effortSel}
         onModelChange={handleModelDraftChange}
         onEffortChange={handleEffortDraftChange}
+        guest={guest}
+        onShare={isGuest ? null : () => setShareOpen(true)}
       />
+
+      <ShareStatusBar guest={guest} online={online} remainingMs={shareRemainingMs} ended={shareOver} endReason={shareEnded} />
 
       {/* 訊息列表 */}
       <div className="relative flex-1 min-h-0 flex flex-col">
@@ -659,13 +676,13 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       >
         {histLoaded && messages.length === 0 && (
           <div className="mt-16 flex flex-col items-center gap-4 text-center">
-            <div className="text-sm text-[oklch(0.65_0.01_264)]">輸入指令開始對話</div>
+            <div className="text-sm text-[oklch(0.65_0.01_264)]">{guestReadOnly ? '目前還沒有訊息' : '輸入指令開始對話'}</div>
             {session.work_dir ? (
               <div className="max-w-full truncate ra-mono text-xs text-[oklch(0.5_0.01_264)]" title={session.work_dir}>
                 {workDirGroupShortLabel(session.work_dir)}{session.git_branch ? ` · ${session.git_branch}` : ''}
               </div>
             ) : null}
-            {inputMode !== 'shell' && (
+            {inputMode !== 'shell' && !isGuest && (
               <div className="flex flex-wrap justify-center gap-2">
                 {EMPTY_SUGGESTIONS.map((t) => (
                   <button key={t} type="button" onClick={() => applySuggestion(t)}
@@ -685,7 +702,9 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
               ? m.resultText
               : m.role === 'user' ? attachmentMessageCopy(m, session.id) : (m.content || '').trim();
           const canForwardShellOrAgent =
-            (m.role === 'claude' || m.role === 'shell') && !m.streaming && !!String(forwardBody || '').trim();
+            !isGuest && (m.role === 'claude' || m.role === 'shell') && !m.streaming && !!String(forwardBody || '').trim();
+          // 署名：訪客訊息顯示暱稱；訪客視角下沒有署名的使用者訊息是擁有者送的。
+          const authorLabel = m.role === 'user' ? (m.author || (isGuest ? '擁有者' : '')) : '';
           const showStreamingTail =
             (state === 'THINKING' || state === 'STREAMING') &&
             m.role === 'claude' &&
@@ -710,6 +729,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
             >
             {m.role === 'user' ? (
               <div className="bubble-user text-white px-4 py-3 text-sm w-fit max-w-full min-w-0">
+                {authorLabel && <div className="mb-1 text-[11px] font-semibold text-white/70" data-msg-author>{authorLabel}</div>}
                 <MessageAttachments items={userParts.attachments} onPreview={setLightboxSrc} />
                 {userParts.text && <div className="whitespace-pre-wrap break-words leading-relaxed">{userParts.text}</div>}
               </div>
@@ -785,7 +805,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                       disabled={!canForwardShellOrAgent}
                       title="轉發到其他會話"
                       aria-label="轉發到其他會話"
-                      className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30"
+                      className={`${isGuest ? 'hidden' : 'inline-flex'} items-center justify-center min-w-[32px] min-h-[32px] rounded-md text-gray-400 hover:text-cyan-400 disabled:opacity-30`}
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></svg>
                     </button>
@@ -799,7 +819,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         })}
 
         {/* Shell 指令批准對話框 */}
-        {state === 'SHELL_AWAITING_APPROVAL' && shellPendingCmd && (
+        {state === 'SHELL_AWAITING_APPROVAL' && shellPendingCmd && canAct && (
           <div className="rounded-xl border border-amber-700/60 bg-amber-950/30 px-4 py-3 text-sm mr-8">
             <div className="text-amber-400 font-semibold mb-2">⚠️ 即將執行 Shell 指令</div>
             <div className="text-gray-400 text-xs mb-1">Shell：{shellPendingCmd.shell_type || shellType}</div>
@@ -825,13 +845,14 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
           <div className="rounded-xl border border-yellow-700 bg-yellow-950/40 px-4 py-3 text-sm mr-8">
             <div className="text-yellow-400 font-semibold mb-2">需要授權</div>
             {permTools.map((t, i) => <PermToolDetail key={i} tool={t} />)}
-            <div className="flex gap-2 mt-3">
+            {!canAct && <div className="mt-2 text-xs text-yellow-200/70">等待有權限的人處理…</div>}
+            <div className={canAct ? 'flex gap-2 mt-3' : 'hidden'}>
               <button onClick={handleAllowOnce}
                 className="px-3 py-1.5 bg-yellow-700 hover:bg-yellow-600 text-white rounded-lg text-xs">
                 允許此操作
               </button>
               {/* 切到 acceptEdits 只對編輯類工具有效；Bash 等會再被拒一次，所以只在全是編輯工具時顯示 */}
-              {permTools.every((t) => EDIT_TOOL_NAMES.has(t.tool_name)) && (
+              {!isGuest && permTools.every((t) => EDIT_TOOL_NAMES.has(t.tool_name)) && (
                 <button onClick={() => handlePermModeCommitNow('acceptEdits')}
                   className="px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white rounded-lg text-xs">
                   允許並自動允許編輯
@@ -845,7 +866,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
           </div>
         )}
 
-        {state === 'AWAITING_SHELL_CONFIRM' && shellRequest && (
+        {state === 'AWAITING_SHELL_CONFIRM' && shellRequest && canAct && (
           <div className="rounded-xl border border-orange-700/90 bg-orange-950/35 px-4 py-3 text-sm mr-8">
             <div className="text-orange-300 font-semibold mb-2">允許執行 Shell 指令？</div>
             <div className="text-gray-200 text-xs font-mono break-words mb-1 whitespace-pre-wrap">{shellRequest.line}</div>
@@ -890,7 +911,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
       )}
       </div>
 
-      {/* 輸入區：水平內距略小於訊息列表，讓輸入框可用寬度較大 */}
+      {/* 輸入區：水平內距略小於訊息列表，讓輸入框可用寬度較大。唯讀訪客／分享已結束時改顯示提示列。 */}
+      {guestReadOnly || shareOver ? (
+        <GuestReadOnlyBar snapshot={isSnapshot} ended={shareOver} />
+      ) : (
       <div
         className={`shrink-0 px-4 sm:px-7 py-4 border-t transition-colors duration-200 ${inputMode === 'shell' ? 'bg-[oklch(0.15_0.02_264)] border-amber-900/40' : 'bg-[oklch(0.15_0.02_264)] border-[oklch(0.26_0.02_264)]'}`}
         style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
@@ -921,12 +945,14 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
               />
             )}
             <div className={(inputMode === 'shell' ? 'ra-cmd-bar shell' : 'ra-cmd-bar') + ' w-full' + (dragOver ? ' ring-2 ring-violet-500/70' : '')}>
-              <ModeToggleBtn
-                value={inputMode}
-                onChange={handleInputModeChange}
-                disabled={modeSwitchDisabled || sending}
-                agentLabel={AGENT_LABEL[agentType] || 'Claude'}
-              />
+              {!isGuest && (
+                <ModeToggleBtn
+                  value={inputMode}
+                  onChange={handleInputModeChange}
+                  disabled={modeSwitchDisabled || sending}
+                  agentLabel={AGENT_LABEL[agentType] || 'Claude'}
+                />
+              )}
               {inputMode !== 'shell' && (
                 <>
                   <input
@@ -1006,6 +1032,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
           </div>
         )}
       </div>
+      )}
 
       <ForwardModal
         payload={forwardModal}
@@ -1032,6 +1059,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
 
       {lightboxSrc && (
         <ChatImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      )}
+
+      {shareOpen && !isGuest && (
+        <ShareModal session={session} onClose={() => setShareOpen(false)} />
       )}
     </div>
   );

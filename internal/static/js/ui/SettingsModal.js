@@ -8,6 +8,7 @@
 const SETTINGS_SECTIONS = [
   { id: 'general', label: '一般' },
   { id: 'appearance', label: '外觀' },
+  { id: 'shares', label: '分享' },
   { id: 'logs', label: '日誌' },
 ];
 
@@ -268,7 +269,7 @@ function AppearanceSection({ draft, setDraft }) {
   );
 }
 
-function SettingsModal({ open, onClose }) {
+function SettingsModal({ open, onClose, onJumpToSession = null }) {
   const [section, setSection] = useState('general');
   const [draft, setDraft] = useState(() => readStoredAppearance());
   const [savedFlash, setSavedFlash] = useState(false);
@@ -363,11 +364,12 @@ function SettingsModal({ open, onClose }) {
           <div className={`flex-1 min-h-0 app-scroll px-5 ${section === 'logs' ? 'py-4 overflow-hidden' : 'py-5 overflow-y-auto'}`}>
             {section === 'general' && <GeneralSection />}
             {section === 'appearance' && <AppearanceSection draft={draft} setDraft={setDraft} />}
+            {section === 'shares' && <SharesSection onJumpToSession={onJumpToSession} />}
             {section === 'logs' && <LogsSection />}
           </div>
           <div className="shrink-0 flex items-center justify-between gap-2 px-5 py-3 border-t border-[oklch(0.26_0.02_264)]">
             {/* 還原預設／儲存只對外觀有效，日誌頁不顯示 */}
-            {section !== 'logs' && (
+            {section !== 'logs' && section !== 'shares' && (
               <button
                 type="button"
                 onClick={handleReset}
@@ -386,7 +388,7 @@ function SettingsModal({ open, onClose }) {
               >
                 關閉
               </button>
-              {section !== 'logs' && (
+              {section !== 'logs' && section !== 'shares' && (
                 <button
                   type="button"
                   onClick={handleSave}

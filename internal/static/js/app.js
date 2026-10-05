@@ -290,10 +290,23 @@ function App() {
         ? <PasswordView onSuccess={() => setAuthed(true)} />
         : renderAuthedLayout()
       }
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onJumpToSession={(sessionId) => {
+          const hit = sidebarSortedSessions.find((x) => x.id === sessionId);
+          if (!hit) {
+            showToast('找不到這個聊天室（可能已刪除）', { error: true });
+            return;
+          }
+          setSettingsOpen(false);
+          selectSession(hit);
+        }}
+      />
       {authed && <QuickSwitcher sessions={sidebarSortedSessions} onSelect={selectSession} />}
     </>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// /share/<token> 進入訪客模式（只看／參與單一聊天室，不載入側欄、設定、快速切換）；其餘為擁有者主介面。
+ReactDOM.createRoot(document.getElementById('root')).render(isGuestMode ? <GuestApp /> : <App />);

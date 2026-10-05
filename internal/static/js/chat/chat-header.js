@@ -83,6 +83,35 @@ function OpenInHostButton({ sessionId, kind }) {
   );
 }
 
+/** 擁有者頂欄的「分享」按鈕：開啟分享設定彈窗。 */
+function ShareButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="分享這個聊天室"
+      aria-label="分享這個聊天室"
+      className="shrink-0 inline-flex items-center gap-1 h-8 px-2 rounded-md text-xs text-[oklch(0.7_0.01_264)] hover:text-violet-300 hover:bg-[oklch(0.2_0.02_264)]"
+    >
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+        <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
+      </svg>
+      分享
+    </button>
+  );
+}
+
+/** 訪客頂欄的身分角標：顯示自己的暱稱與權限（唯讀快照／唯讀／可編輯）。 */
+function GuestRoleChip({ guest }) {
+  const label = guest.mode === 'snapshot' ? '唯讀快照' : guest.role === 'editor' ? '可編輯' : '唯讀';
+  return (
+    <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-md bg-violet-500/15 text-violet-200" title={`你的暱稱：${guest.nickname}`}>
+      {guest.nickname} · {label}
+    </span>
+  );
+}
+
 function ChatSessionHeader({
   session,
   showBack,
@@ -108,11 +137,14 @@ function ChatSessionHeader({
   effortSel,
   onModelChange,
   onEffortChange,
+  guest = null,
+  onShare = null,
 }) {
-  const expanded = !headerCollapsed;
-  const showPerm = showPermModeSelect && inputMode === 'agent';
+  const isGuest = !!guest;
+  const expanded = !headerCollapsed && !isGuest;
+  const showPerm = !isGuest && showPermModeSelect && inputMode === 'agent';
   const { shellEnabled } = useServerConfig();
-  const showOpenButtons = shellEnabled && !!(session.work_dir && String(session.work_dir).trim());
+  const showOpenButtons = !isGuest && shellEnabled && !!(session.work_dir && String(session.work_dir).trim());
   const permTitle =
     agentType === 'antigravity'
       ? 'Antigravity 核准模式（--approval-mode）'
@@ -124,7 +156,7 @@ function ChatSessionHeader({
     ? (sessionModel.display_text || '')
     : (sessionModel || '');
   const modelOk = modelLabel && modelLabel !== '—';
-  const quotaText = quota && quota.display_text && quota.display_text !== '—' ? quota.display_text : '';
+  const quotaText = !isGuest && quota && quota.display_text && quota.display_text !== '—' ? quota.display_text : '';
   const subParts = [
     repoLabel !== '（未設定工作目錄）' ? repoLabel : null,
     modelOk ? modelLabel : null,
@@ -139,7 +171,7 @@ function ChatSessionHeader({
       {/* 手機：標題列 + badge 列（設計 2b） */}
       <div className="sm:hidden px-4 pt-2 pb-3">
         <div className="flex items-center gap-2.5 min-w-0">
-          {showBack && (
+          {showBack && !isGuest && (
             <button type="button" onClick={onBack}
               className="shrink-0 text-[oklch(0.7_0.01_264)] hover:text-[oklch(0.94_0.01_264)] text-lg leading-none px-0.5">
               ←
@@ -150,14 +182,16 @@ function ChatSessionHeader({
           </div>
           <SessionStateChip state={state} activityHint={activityHint} className="shrink-0" />
           <GitBranchBadge branch={session.git_branch} compact />
-          <HeaderToggleButton expanded={expanded} onToggle={onToggleHeader} />
+          {isGuest && <GuestRoleChip guest={guest} />}
+          {!isGuest && onShare && <ShareButton onClick={onShare} />}
+          {!isGuest && <HeaderToggleButton expanded={expanded} onToggle={onToggleHeader} />}
         </div>
         <div className="flex items-center gap-1.5 mt-2.5 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-wrap">
           <span className={`inline-flex items-center gap-1 shrink-0 text-[11.5px] font-semibold px-2 py-1 rounded-md ${getAgentBadgeClass(agentType)}`}>
             <AgentBadgeIcon agentType={agentType} />
             {AGENT_LABEL[agentType] || agentType}
           </span>
-          <QuotaBadge quota={quota} compact agentType={agentType} onRefresh={agentType !== 'antigravity' ? onQuotaRefresh : null} refreshing={quotaRefreshing} />
+          {!isGuest && <QuotaBadge quota={quota} compact agentType={agentType} onRefresh={agentType !== 'antigravity' ? onQuotaRefresh : null} refreshing={quotaRefreshing} />}
           {showPerm ? (
             <PermModeIconChip
               agentType={agentType}
@@ -222,14 +256,17 @@ function ChatSessionHeader({
             </div>
             <SessionStateChip state={state} activityHint={activityHint} className="shrink-0" />
             <GitBranchBadge branch={session.git_branch} compact />
+            {isGuest && <GuestRoleChip guest={guest} />}
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            {!isGuest && onShare && <ShareButton onClick={onShare} />}
             {showOpenButtons ? (
               <div className="flex items-center gap-0.5 pr-1 border-r border-[oklch(0.26_0.02_264)]">
                 <OpenInHostButton sessionId={session.id} kind="vscode" />
                 <OpenInHostButton sessionId={session.id} kind="folder" />
               </div>
             ) : null}
+            {!isGuest && (
             <ModelSelect
               agentType={agentType}
               value={modelSel}
@@ -238,7 +275,8 @@ function ChatSessionHeader({
               id="chat-model"
               className="w-[9rem]"
             />
-            {showEffortSelect ? (
+            )}
+            {!isGuest && showEffortSelect ? (
               <EffortSelect
                 value={effortSel}
                 onChange={onEffortChange}

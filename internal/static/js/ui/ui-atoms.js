@@ -847,6 +847,7 @@ function mapMessageRow(m) {
     resultText,
     status,
     createdAt: m.created_at || m.createdAt || null,
+    author: m.author || '', // 分享聊天室：空字串＝擁有者；有值＝訪客暱稱
     html: role === 'claude' ? (content ? parseMarkdown(content) : null) : null,
     streaming: pending,
     exitCode: role === 'shell' ? parseShellExitCode(content) : undefined,
