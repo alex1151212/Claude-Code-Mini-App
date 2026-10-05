@@ -186,23 +186,48 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 
 		isClaude := agentType == agent.TypeClaude
 
+		// connDone：handler 返回後 fiber 會回收 conn。hub.Broadcast 先複製訂閱者清單再呼叫 send，
+		// 其他連線的廣播（例如 presence leave）可能在本連線結束後才送到，所以 send 必須在回收後變成 no-op。
+		connDone := false
 		send := func(msg serverMsg) bool {
 			b, _ := json.Marshal(msg)
 			writeMu.Lock()
 			defer writeMu.Unlock()
+			if connDone {
+				return false
+			}
 			return c.WriteMessage(1, b) == nil
 		}
+		defer func() {
+			writeMu.Lock()
+			connDone = true
+			writeMu.Unlock()
+		}()
 
 		unsub := hub.Subscribe(sessionID, send)
 		defer unsub()
 
 		// 在線名單登記；訪客另有 kick（結束分享）與到期 timer。
 		entry := &connEntry{sessionID: sessionID, shareID: shareID, nickname: guestNick}
+		// kick 可能由到期 timer 或 KickShare 從別的 goroutine 呼叫；handler 返回後 fiber 會回收 conn，
+		// 所以以 kickMu + finished 保證 kick 不會在 handler 結束後碰到已回收的連線。
+		var kickMu sync.Mutex
+		finished := false
 		entry.kick = func(reason string) {
+			kickMu.Lock()
+			defer kickMu.Unlock()
+			if finished {
+				return
+			}
 			send(serverMsg{Type: "share_ended", Content: reason})
 			_ = c.WriteControl(fiberws.CloseMessage, fiberws.FormatCloseMessage(4001, "share ended"), time.Now().Add(time.Second))
 			c.Close()
 		}
+		defer func() {
+			kickMu.Lock()
+			finished = true
+			kickMu.Unlock()
+		}()
 		removePresence := presenceAdd(entry)
 		if isGuest {
 			slog.Info(fmt.Sprintf("[ws] 訪客 %q 連線 share=%d role=%s", guestNick, shareID, guestRole))
