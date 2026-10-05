@@ -30,9 +30,21 @@ type MessageContent struct {
 	Text string `json:"text,omitempty"`
 	// Content 是 tool_result block 的巢狀內容（type=="tool_result" 時），
 	// MCP 工具若回傳圖片（如截圖）會以 type=="image" 出現在這裡。
-	Content []MessageContent `json:"content,omitempty"`
+	Content NestedContent `json:"content,omitempty"`
 	// Source 是 image block 的資料來源（type=="image" 時）。
 	Source *ImageSource `json:"source,omitempty"`
+}
+
+// NestedContent 容許 tool_result.content 為純字串（多數 MCP 工具）或 block 陣列；
+// 字串形式沒有圖片可收，直接視為空。
+type NestedContent []MessageContent
+
+func (n *NestedContent) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		*n = nil
+		return nil
+	}
+	return json.Unmarshal(b, (*[]MessageContent)(n))
 }
 
 // ImageSource 對應 Anthropic API image content block 的 base64 來源。
