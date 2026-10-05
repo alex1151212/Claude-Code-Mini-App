@@ -323,10 +323,11 @@ function ChatSessionHeader({
               type="button"
               onClick={onQuotaRefresh}
               disabled={quotaRefreshing}
-              className="text-xs text-[oklch(0.55_0.01_264)] hover:text-violet-300 ra-mono"
+              className={'text-xs ra-mono ' + (quotaRefreshing ? 'text-violet-400 animate-spin' : 'text-[oklch(0.55_0.01_264)] hover:text-violet-300')}
               title="刷新帳戶用量"
+              aria-label="刷新帳戶用量"
             >
-              {quotaRefreshing ? '↻' : '↻'}
+              ↻
             </button>
           ) : null}
         </div>

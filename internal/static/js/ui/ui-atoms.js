@@ -246,6 +246,21 @@ function sendPromptViaEphemeralWS(sessionId, text) {
   });
 }
 
+/**
+ * 新建 session 後送第一則訊息。失敗時 session 已存在，不能讓使用者重按（會重複建立）也不能丟訊息，
+ * 所以改放進新 session 的草稿，進聊天室後自己重送。回傳是否送成功。
+ */
+async function sendFirstPromptOrDraft(sessionId, text) {
+  try {
+    await sendPromptViaEphemeralWS(sessionId, text);
+    return true;
+  } catch (_) {
+    try { localStorage.setItem(draftInputStorageKey(sessionId), text); } catch (__) {}
+    showToast('Session 已建立，但首則訊息未送出，已放入輸入框', { error: true, duration: 4000 });
+    return false;
+  }
+}
+
 /** 切換 agent_type 時，若舊的 mode 在新 agent 下不合法，退回 default。 */
 function normalizePermMode(agentType, mode) {
   const valid = permModeOptionsFor(agentType).map((o) => o.value);
@@ -554,8 +569,15 @@ function QuotaBadge({ quota, onRefresh, refreshing, className = '', compact = fa
   const chipCls = compact
     ? 'inline-flex items-center shrink-0 ' + compactMaxW + ' px-2 py-1 rounded-md bg-[oklch(0.24_0.02_264)] '
     : 'inline-flex items-center gap-0.5 min-w-0 max-w-full ';
+  // 手機（compact）沒有獨立的刷新鍵，整個晶片可點擊來刷新
+  const tappable = compact && !!onRefresh;
+  const Chip = tappable ? 'button' : 'span';
   return (
-    <span className={chipCls + className} title={title}>
+    <Chip
+      {...(tappable ? { type: 'button', onClick: onRefresh, disabled: refreshing } : {})}
+      className={chipCls + className + (tappable ? ' cursor-pointer' : '') + (refreshing ? ' animate-pulse' : '')}
+      title={tappable ? title + ' · 點擊刷新' : title}
+    >
       <span className="text-[10px] font-mono truncate">
         <QuotaSegments quota={quota} text={shown} />
       </span>
@@ -570,7 +592,7 @@ function QuotaBadge({ quota, onRefresh, refreshing, className = '', compact = fa
           ↻
         </button>
       ) : null}
-    </span>
+    </Chip>
   );
 }
 

@@ -117,8 +117,8 @@ function ForwardModal({
         throw new Error(j.error || `建立失敗 (${res.status})`);
       }
       const created = await res.json();
-      await sendPromptViaEphemeralWS(created.id, composed);
-      onForwarded({ messageKey: payload.messageKey, targetSession: created, jump: true });
+      const sent = await sendFirstPromptOrDraft(created.id, composed);
+      onForwarded({ messageKey: payload.messageKey, targetSession: created, jump: true, sent });
       onClose();
     } catch (e) {
       setErrText(e.message || String(e));

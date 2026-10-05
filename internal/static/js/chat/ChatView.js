@@ -14,6 +14,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     modelSel, setModelSel,
     effortSel, setEffortSel,
     histLoaded,
+    connected,
     inputMode, setInputMode,
     shellType,
     shellPendingCmd, setShellPendingCmd,
@@ -40,6 +41,14 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const [shareOpen, setShareOpen] = useState(false);
   const shareRemainingMs = useShareRemaining(isGuest ? guest.expires_at : null);
   const shareOver = isGuest && (!!shareEnded || (shareRemainingMs != null && shareRemainingMs <= 0));
+  // 斷線超過 1.5 秒才顯示橫幅，切換 session 時的初次連線不閃一下；snapshot 沒有 WS、分享已結束也不顯示。
+  const wantOfflineBar = !connected && !isSnapshot && !shareOver;
+  const [offlineShown, setOfflineShown] = useState(false);
+  useEffect(() => {
+    if (!wantOfflineBar) { setOfflineShown(false); return undefined; }
+    const t = setTimeout(() => setOfflineShown(true), 1500);
+    return () => clearTimeout(t);
+  }, [wantOfflineBar]);
 
   const [input, setInput]         = useState('');
   const [lightboxSrc, setLightboxSrc] = useState(null);
@@ -65,6 +74,9 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   composerSessionRef.current = session.id;
   const pendingSendRef = useRef(null);
   const [sending, setSending] = useState(false);
+  // 按下後等伺服器回應的狀態：避免連點，也讓使用者知道有按到。逾時或狀態變化後重設（見 taskRunning 之後的 effect）。
+  const [interrupting, setInterrupting] = useState(false);
+  const [shellConfirmPending, setShellConfirmPending] = useState(false);
   const updateAttachments = useCallback((update) => {
     const next = update(attachmentItemsRef.current);
     attachmentItemsRef.current = next;
@@ -177,6 +189,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     clearAttachments();
     pendingSendRef.current = null;
     setSending(false);
+    setInterrupting(false);
+    setShellConfirmPending(false);
     setLightboxSrc(null);
     setDragOver(false);
     dragDepthRef.current = 0;
@@ -323,6 +337,17 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const handleSheetForward = (p) => {
     setForwardModal({ messageKey: p.messageKey, messageContent: p.text });
   };
+  // WS 斷線時 send 會回 false；不能讓操作靜默消失（面板被清掉、輸入被清空卻什麼都沒送出）。
+  const sendOrToast = (obj) => {
+    if (send(obj)) return true;
+    showToast('連線中斷，操作未送出，請稍後再試', { error: true, duration: 3000 });
+    return false;
+  };
+  const flushOrToast = () => {
+    if (flushPendingModes()) return true;
+    showToast('連線中斷，操作未送出，請稍後再試', { error: true, duration: 3000 });
+    return false;
+  };
   const handleSend = async (overrideText) => {
     if (pendingSendRef.current || isDisabled) return;
     const raw = overrideText !== undefined && overrideText !== null ? String(overrideText) : input;
@@ -331,8 +356,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     if ((!trimmed && selected.length === 0) || selected.some(a => a.status !== 'ready')) return;
     if (trimmed === '/reset' || trimmed === '/clear') {
       if (state !== 'IDLE' && state !== 'SHELL_IDLE') return;
-      if (!flushPendingModes()) return;
-      send({ type: 'reset_context' });
+      if (!flushOrToast()) return;
+      if (!sendOrToast({ type: 'reset_context' })) return;
       clearDraftInputForSession(session.id);
       setInput('');
       closeComposerMenus();
@@ -340,8 +365,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     }
     if (inputMode === 'shell') {
       if (state !== 'SHELL_IDLE' && state !== 'IDLE') return;
-      if (!flushPendingModes()) return;
-      send({ type: 'shell_exec', data: trimmed });
+      if (!flushOrToast()) return;
+      if (!sendOrToast({ type: 'shell_exec', data: trimmed })) return;
       clearDraftInputForSession(session.id);
       setInput('');
       closeComposerMenus();
@@ -350,7 +375,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     const idle = state === 'IDLE' || state === 'SHELL_IDLE';
     if (!idle && !canQueue) return;
     // 排隊時不 flush 模式：set_mode 等會廣播 idle 狀態，執行中送會讓 UI 誤判完成。
-    if (idle && !flushPendingModes()) return;
+    if (idle && !flushOrToast()) return;
     const token = { sessionId: session.id };
     pendingSendRef.current = token;
     setSending(true);
@@ -462,12 +487,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   };
 
   const handleAllowOnce = () => {
-    send({ type: 'allow_once', tools: permTools.map(t => t.tool_name) });
+    if (!sendOrToast({ type: 'allow_once', tools: permTools.map(t => t.tool_name) })) return;
     setPermTools([]);
   };
 
   const handleDenyOnce = () => {
-    send({ type: 'deny_once' });
+    if (!sendOrToast({ type: 'deny_once' })) return;
     setPermTools([]);
   };
 
@@ -480,11 +505,23 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const handleEffortDraftChange = (newEffort) => setEffortSel(newEffort);
   /** 授權面板「允許並記住」：須立即寫入後端並重試 */
   const handlePermModeCommitNow = (newMode) => {
-    if (!commitPermMode(newMode)) return;
+    if (!commitPermMode(newMode)) {
+      showToast('連線中斷，操作未送出，請稍後再試', { error: true, duration: 3000 });
+      return;
+    }
     setPermTools([]);
   };
 
-  const handleInterrupt = () => send({ type: 'interrupt' });
+  const handleInterrupt = () => {
+    if (interrupting) return;
+    if (sendOrToast({ type: 'interrupt' })) setInterrupting(true);
+  };
+
+  // 點了之後等伺服器回應：避免對 Shell 允許／拒絕連點（這三顆不會立刻收起面板）
+  const sendShellConfirm = (type) => {
+    if (shellConfirmPending) return;
+    if (sendOrToast({ type })) setShellConfirmPending(true);
+  };
 
   const fileInputRef = useRef(null);
   const uploading = attachments.some(a => a.status === 'uploading');
@@ -580,12 +617,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   };
 
   const handleShellApprove = () => {
-    send({ type: 'shell_approve' });
+    if (!sendOrToast({ type: 'shell_approve' })) return;
     setShellPendingCmd(null);
   };
 
   const handleShellCancel = () => {
-    send({ type: 'shell_cancel' });
+    if (!sendOrToast({ type: 'shell_cancel' })) return;
     setShellPendingCmd(null);
   };
 
@@ -602,6 +639,15 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   useEffect(() => {
     if (isDisabled) closeComposerMenus();
   }, [isDisabled]);
+
+  // 中斷：任務停下來就解除；Shell 確認：狀態或請求一變就解除。兩者都有 10 秒保底，避免伺服器沒回應時按鈕永遠鎖住。
+  useEffect(() => { if (!taskRunning) setInterrupting(false); }, [taskRunning]);
+  useEffect(() => { setShellConfirmPending(false); }, [state, shellRequest]);
+  useEffect(() => {
+    if (!interrupting && !shellConfirmPending) return undefined;
+    const t = setTimeout(() => { setInterrupting(false); setShellConfirmPending(false); }, 10000);
+    return () => clearTimeout(t);
+  }, [interrupting, shellConfirmPending]);
 
   useEffect(() => {
     if (!composerMenuOpen) return;
@@ -667,6 +713,12 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
 
       <ShareStatusBar guest={guest} online={online} remainingMs={shareRemainingMs} ended={shareOver} endReason={shareEnded} />
 
+      {offlineShown && (
+        <div role="status" className="shrink-0 bg-amber-500/10 text-amber-200 border-b border-amber-700/30 px-4 py-1.5 text-xs">
+          連線中…（訊息暫時無法送出）
+        </div>
+      )}
+
       {/* 訊息列表 */}
       <div className="relative flex-1 min-h-0 flex flex-col">
       <div
@@ -674,6 +726,9 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         onScroll={syncChatNearBottom}
         className="flex-1 min-h-0 overflow-y-auto app-scroll px-4 py-[18px] sm:px-8 sm:py-7 flex flex-col gap-5"
       >
+        {!histLoaded && (
+          <div className="mt-16 text-center text-sm text-[oklch(0.55_0.01_264)]">載入對話中…</div>
+        )}
         {histLoaded && messages.length === 0 && (
           <div className="mt-16 flex flex-col items-center gap-4 text-center">
             <div className="text-sm text-[oklch(0.65_0.01_264)]">{guestReadOnly ? '目前還沒有訊息' : '輸入指令開始對話'}</div>
@@ -877,16 +932,16 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2 mt-2">
-              <button type="button" onClick={() => { send({ type: 'shell_allow_once' }); }}
-                className="px-3 py-1.5 bg-orange-800 hover:bg-orange-700 text-white rounded-lg text-xs">
+              <button type="button" onClick={() => sendShellConfirm('shell_allow_once')} disabled={shellConfirmPending}
+                className="px-3 py-1.5 bg-orange-800 hover:bg-orange-700 text-white rounded-lg text-xs disabled:opacity-40">
                 允許一次
               </button>
-              <button type="button" onClick={() => { send({ type: 'shell_allow_remember_workdir' }); }}
-                className="px-3 py-1.5 bg-amber-900 hover:bg-amber-800 text-amber-100 rounded-lg text-xs">
+              <button type="button" onClick={() => sendShellConfirm('shell_allow_remember_workdir')} disabled={shellConfirmPending}
+                className="px-3 py-1.5 bg-amber-900 hover:bg-amber-800 text-amber-100 rounded-lg text-xs disabled:opacity-40">
                 允許並記住此目錄
               </button>
-              <button type="button" onClick={() => { send({ type: 'shell_deny' }); }}
-                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs">
+              <button type="button" onClick={() => sendShellConfirm('shell_deny')} disabled={shellConfirmPending}
+                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-xs disabled:opacity-40">
                 拒絕
               </button>
             </div>
@@ -920,9 +975,9 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
       >
         {taskRunning && !canQueue ? (
-          <button onClick={handleInterrupt}
-            className="w-full py-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-sm">
-            中斷
+          <button onClick={handleInterrupt} disabled={interrupting}
+            className="w-full py-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-sm disabled:opacity-60">
+            {interrupting ? '中斷中…' : '中斷'}
           </button>
         ) : (
           <div className="w-full relative" ref={composerWrapRef}>
@@ -931,8 +986,8 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
               items={queue}
               paused={queuePaused}
               canResume={queue.length > 0 && (queuePaused || state === 'IDLE' || state === 'SHELL_IDLE')}
-              onRemove={(id) => send({ type: 'queue_remove', id })}
-              onResume={() => send({ type: 'queue_resume' })}
+              onRemove={(id) => sendOrToast({ type: 'queue_remove', id })}
+              onResume={() => sendOrToast({ type: 'queue_resume' })}
             />
             {inputMode !== 'shell' && (
               <MentionChips items={mentionChips} onRemove={handleMentionChipRemove} />
@@ -1015,10 +1070,10 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
               {/* 把中斷／送出推到按鈕列右側 */}
               <div className="flex-1" aria-hidden="true" />
               {agentRunning && (
-                <button type="button" onClick={handleInterrupt}
-                  aria-label="中斷"
-                  title="中斷"
-                  className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] bg-red-900/70 hover:bg-red-800 text-red-200 text-sm">
+                <button type="button" onClick={handleInterrupt} disabled={interrupting}
+                  aria-label={interrupting ? '中斷中' : '中斷'}
+                  title={interrupting ? '中斷中…' : '中斷'}
+                  className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] bg-red-900/70 hover:bg-red-800 text-red-200 text-sm ${interrupting ? 'animate-pulse' : ''}`}>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
                 </button>
               )}
@@ -1040,14 +1095,17 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
         currentSessionId={session.id}
         allSessions={allSessions}
         usePermModeDropdown={usePermModeDropdown}
-        onForwarded={({ messageKey, targetSession, jump }) => {
-          setForwardHints((prev) => ({
-            ...prev,
-            [messageKey]: {
-              label: `${targetSession.agent_type || 'claude'} / ${workDirGroupShortLabel(targetSession.work_dir)}`,
-              session: targetSession,
-            },
-          }));
+        onForwarded={({ messageKey, targetSession, jump, sent = true }) => {
+          // 新建會話但訊息沒送出時不標「已轉發」，內容已放進對方的草稿
+          if (sent) {
+            setForwardHints((prev) => ({
+              ...prev,
+              [messageKey]: {
+                label: `${targetSession.agent_type || 'claude'} / ${workDirGroupShortLabel(targetSession.work_dir)}`,
+                session: targetSession,
+              },
+            }));
+          }
           if (jump) jumpToSession(targetSession);
         }}
       />

@@ -17,12 +17,15 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
   const [modelSel, setModelSel]   = useState(() => session.model || '');
   const [effortSel, setEffortSel] = useState(() => session.effort || '');
   const [histLoaded, setHistLoaded] = useState(false);
+  const [connected, setConnected] = useState(false);
   const [inputMode, setInputMode] = useState(() => readInputModeForSession(session.id));
   const [shellType, setShellType] = useState('bash');
   const [shellPendingCmd, setShellPendingCmd] = useState(null);
   const [shellRequest, setShellRequest] = useState(null);
   const [quota, setQuota] = useState(null);
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
+  // 有值＝使用者剛按了刷新、正在等 quota_update；背景自動推送的 quota_update 不跳 toast。
+  const quotaTimerRef = useRef(null);
   const [sessionModel, setSessionModel] = useState(null);
   const [activityHint, setActivityHint] = useState('');
   /** 執行中先送出、等待前一輪完成的訊息（後端持久化，sync / queue_update 同步） */
@@ -53,6 +56,10 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     shellRenderPending.current = false;
     setMessages([]);
     setHistLoaded(false);
+    setConnected(false);
+    clearTimeout(quotaTimerRef.current);
+    quotaTimerRef.current = null;
+    setQuotaRefreshing(false);
     setState('IDLE');
     setOnline([]);
     setPermTools([]);
@@ -102,9 +109,11 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
           else console.warn('[messages] unexpected payload', data);
         } else {
           console.warn('[messages] load failed', res.status);
+          if (isCurrent()) showToast('載入對話失敗', { error: true, duration: 3000 });
         }
       } catch (err) {
         console.warn('[messages] load error', err);
+        if (isCurrent()) showToast('載入對話失敗', { error: true, duration: 3000 });
       }
       if (isCurrent()) {
         // snapshot：截止當下可能還有一則進行中的回覆，但之後不會再更新，不顯示串流動畫。
@@ -139,6 +148,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
 
       ws.onopen = () => {
         everConnected = true;
+        if (isCurrent() && wsRef.current === ws) setConnected(true);
         markRead();
       };
 
@@ -214,7 +224,12 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
 
         if (msg.type === 'quota_update' && msg.quota) {
           setQuota(msg.quota);
-          setQuotaRefreshing(false);
+          if (quotaTimerRef.current) {
+            clearTimeout(quotaTimerRef.current);
+            quotaTimerRef.current = null;
+            setQuotaRefreshing(false);
+            showToast(msg.quota.error ? `用量更新失敗：${msg.quota.error}` : '用量已更新', { error: !!msg.quota.error, duration: 2500 });
+          }
           return;
         }
 
@@ -444,6 +459,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
           inputRequestsRef.current.delete(id);
         }
         if (!isCurrent() || wsRef.current !== ws) return;
+        setConnected(false);
         const scheduleReconnect = () => {
           reconnectTimerRef.current = setTimeout(() => {
             reconnectTimerRef.current = null;
@@ -548,13 +564,19 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
   const handleQuotaRefresh = useCallback(() => {
     if (quotaRefreshing) return;
     if (agentType === 'antigravity') return;
-    setQuotaRefreshing(true);
     if (!send({ type: 'refresh_quota' })) {
-      setQuotaRefreshing(false);
+      showToast('連線中斷，無法更新用量', { error: true, duration: 2500 });
       return;
     }
-    setTimeout(() => setQuotaRefreshing(false), 10000);
+    setQuotaRefreshing(true);
+    quotaTimerRef.current = setTimeout(() => {
+      quotaTimerRef.current = null;
+      setQuotaRefreshing(false);
+      showToast('用量更新逾時', { error: true, duration: 2500 });
+    }, 10000);
   }, [quotaRefreshing, agentType, send]);
+
+  useEffect(() => () => clearTimeout(quotaTimerRef.current), []);
 
   /** 授權面板「允許並記住」：立即寫入後端並更新已套用 ref，不等下次送出才 flush */
   const commitPermMode = useCallback((newMode) => {
@@ -573,6 +595,7 @@ function useChatSocket({ session, agentType, showPermModeSelect, showEffortSelec
     modelSel, setModelSel,
     effortSel, setEffortSel,
     histLoaded,
+    connected,
     inputMode, setInputMode,
     shellType,
     shellPendingCmd, setShellPendingCmd,

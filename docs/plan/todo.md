@@ -9,6 +9,7 @@
 - [ ] 手機實機驗證：TG WebView（iOS／Android）📎 檔案選擇器、佇列 UI
 - [ ] 驗證 Codex／Cursor／Kiro 能以絕對路徑讀取上傳的圖片（Claude 的 Read 工具可讀圖）
 - [ ] （另案）`internal/static/uploads` 掛在未驗證的 `app.Static` 下，agent 截圖知道 URL 即可讀
+- [ ] 主要情境即時回饋與可靠性：授權／中斷 send 失敗處理、WS 斷線指示、用量刷新（手機）、建立 session 重複、載入中與登入卡住（見 [計劃](todo/ux-feedback.md)）
 
 ## ✅ 本輪完成（2026-09-30）
 - [x] 訊息佇列：執行中送出的訊息排隊、完成後自動續跑、失敗／中斷／拒絕授權暫停（存 DB）

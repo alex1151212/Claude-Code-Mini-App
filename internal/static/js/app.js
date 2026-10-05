@@ -8,23 +8,28 @@ function PasswordView({ onSuccess }) {
     if (!pwd.trim()) return;
     setLoading(true);
     setError('');
-    const res = await fetch(resolveApiUrl('/auth/login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pwd }),
-    });
-    setLoading(false);
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (data.token) {
-        try {
-          localStorage.setItem(WEB_SESSION_STORAGE_KEY, data.token);
-        } catch (_) {}
+    try {
+      const res = await fetch(resolveApiUrl('/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd }),
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.token) {
+          try {
+            localStorage.setItem(WEB_SESSION_STORAGE_KEY, data.token);
+          } catch (_) {}
+        }
+        onSuccess();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || '密碼錯誤，請重試');
       }
-      onSuccess();
-    } else {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error || '密碼錯誤，請重試');
+    } catch (_) {
+      setError('連線失敗，請重試');
+    } finally {
+      setLoading(false);
     }
   };
 

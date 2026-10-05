@@ -48,7 +48,7 @@ function NewSessionComposer({ prefill, onCreated, onCancel }) {
       const created = await res.json();
       const trimmedMsg = message.trim();
       if (trimmedMsg) {
-        await sendPromptViaEphemeralWS(created.id, trimmedMsg);
+        await sendFirstPromptOrDraft(created.id, trimmedMsg);
       }
       onCreated(created);
     } catch (e) {
