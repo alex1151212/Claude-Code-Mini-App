@@ -32,9 +32,6 @@ func (h *UploadHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return jsonErr(c, 400, "缺少 file 欄位")
 	}
-	if fh.Size > media.MaxUploadBytes {
-		return jsonErr(c, 413, "檔案超過上限 8 MB")
-	}
 	f, err := fh.Open()
 	if err != nil {
 		return jsonErr(c, 400, "讀取上傳檔失敗")

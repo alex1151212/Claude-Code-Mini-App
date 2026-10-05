@@ -481,7 +481,6 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
     uploadControllersRef.current.set(item.id, controller);
     updateAttachments(prev => prev.map(a => a.id === item.id ? { ...a, status: 'uploading', error: '' } : a));
     try {
-      if (item.file.size > 8 * 1024 * 1024) throw new Error('檔案超過上限 8 MB');
       if (!item.file.size) throw new Error('檔案是空的');
       const fd = new FormData();
       fd.append('file', item.file);
@@ -502,9 +501,7 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
   const uploadFiles = async (files) => {
     if (!files.length || pendingSendRef.current || inputMode === 'shell' || isDisabled) return;
     const sessionId = session.id;
-    const room = Math.max(0, 32 - attachmentItemsRef.current.length);
-    if (files.length > room) showToast('每則訊息最多 32 個附件', { error: true });
-    const items = files.slice(0, room).map(file => ({ id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`, file, name: file.name, size: file.size, previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : '', status: 'uploading' }));
+    const items = files.map(file => ({ id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`, file, name: file.name, size: file.size, previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : '', status: 'uploading' }));
     updateAttachments(prev => [...prev, ...items]);
     focusChatInput();
     for (const item of items) await uploadAttachment(item, sessionId);
@@ -936,14 +933,13 @@ function ChatView({ session, onBack, showBack = true, fullHeight = true, usePerm
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept="image/*,.pdf,.txt,.md,.log,.json,.csv"
                     className="hidden"
                     onChange={handleFilesPicked}
                   />
                   <button type="button" onClick={() => fileInputRef.current?.click()}
                     disabled={sending || isDisabled}
                     aria-label="附加圖片或檔案"
-                    title="附加圖片或檔案（上限 8 MB）"
+                    title="附加圖片或檔案"
                     className="shrink-0 flex items-center justify-center w-8 h-8 rounded-[8px] text-[oklch(0.75_0.01_264)] hover:bg-[oklch(0.22_0.02_264)] hover:text-violet-300 disabled:opacity-40 transition-colors">
                     {uploading ? (
                       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="w-4 h-4 animate-spin" aria-hidden="true">

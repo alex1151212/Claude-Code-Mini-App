@@ -59,9 +59,6 @@ func (db *DB) ResolveAttachments(sessionID string, ids []string) ([]Attachment, 
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	if len(ids) > 32 {
-		return nil, fmt.Errorf("每則訊息最多 32 個附件")
-	}
 	all, err := db.AttachmentMap(sessionID)
 	if err != nil {
 		return nil, err

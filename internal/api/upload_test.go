@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -24,7 +25,7 @@ func TestUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := fiber.New()
+	app := fiber.New(fiber.Config{BodyLimit: math.MaxInt32}) // 與 server.go 一致
 	app.Post("/sessions/:id/uploads", NewUploadHandler(database).Upload)
 
 	post := func(id, field, name string, body []byte) (int, map[string]string) {
@@ -55,8 +56,12 @@ func TestUpload(t *testing.T) {
 		t.Fatalf("content=%q", b)
 	}
 
-	if code, _ := post(s.ID, "file", "run.exe", []byte("MZ")); code != 400 {
+	// 不限類型與大小：.exe 與超過舊上限 8 MB 的檔案都可上傳。
+	if code, _ := post(s.ID, "file", "run.exe", []byte("MZ")); code != 200 {
 		t.Errorf("exe code=%d", code)
+	}
+	if code, _ := post(s.ID, "file", "big.bin", make([]byte, 9*1024*1024)); code != 200 {
+		t.Errorf("big code=%d", code)
 	}
 	if code, _ := post(s.ID, "other", "a.png", []byte("x")); code != 400 {
 		t.Errorf("missing field code=%d", code)

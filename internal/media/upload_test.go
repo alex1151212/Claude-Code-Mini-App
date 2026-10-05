@@ -27,18 +27,36 @@ func TestSaveUpload(t *testing.T) {
 		t.Fatalf("content=%q", b)
 	}
 
-	for name, r := range map[string]*bytes.Reader{
-		"x.exe":   bytes.NewReader([]byte("MZ")),
-		"noext":   bytes.NewReader([]byte("a")),
-		"big.png": bytes.NewReader(make([]byte, MaxUploadBytes+1)),
-		"e.png":   bytes.NewReader(nil),
+	// 不限類型：任意副檔名、無副檔名都可上傳；怪異副檔名會被淨化掉。
+	for name, wantExt := range map[string]string{
+		"x.exe":                     ".exe",
+		"noext":                     "",
+		"a.tar.gz":                  ".gz",
+		"bad.e x":                   "",
+		"long.aaaaaaaaaaaaaaaaaaaa": "",
 	} {
-		if _, err := SaveUpload("sess1", name, r); err == nil {
-			t.Errorf("%s 應被拒絕", name)
+		p, err := SaveUpload("sess1", name, strings.NewReader("data"))
+		if err != nil {
+			t.Errorf("%s 應可上傳: %v", name, err)
+			continue
+		}
+		if filepath.Ext(p) != wantExt || filepath.Dir(p) != wantDir {
+			t.Errorf("%s → %s，副檔名應為 %q", name, p, wantExt)
 		}
 	}
-	entries, _ := os.ReadDir(wantDir)
-	if len(entries) != 1 {
-		t.Fatalf("被拒絕的檔案不應殘留，got %d 個", len(entries))
+
+	// 不限大小：超過舊上限 8 MB 的檔案也可上傳。
+	if _, err := SaveUpload("sess1", "big.bin", bytes.NewReader(make([]byte, 9*1024*1024))); err != nil {
+		t.Errorf("大檔應可上傳: %v", err)
+	}
+
+	// 空檔仍拒絕且不殘留。
+	before, _ := os.ReadDir(wantDir)
+	if _, err := SaveUpload("sess1", "e.png", bytes.NewReader(nil)); err == nil {
+		t.Error("空檔應被拒絕")
+	}
+	after, _ := os.ReadDir(wantDir)
+	if len(after) != len(before) {
+		t.Fatalf("被拒絕的檔案不應殘留，before=%d after=%d", len(before), len(after))
 	}
 }

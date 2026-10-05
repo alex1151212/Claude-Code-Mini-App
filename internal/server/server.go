@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -112,9 +113,9 @@ func Start(ctx context.Context) (*Server, error) {
 
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: false,
-		// 預設 4MB；上傳單檔上限 8MB（media.MaxUploadBytes）+ multipart 開銷。
+		// 預設 4MB；使用者上傳不限制大小，故放寬到 fasthttp 可表示的最大值（約 2GB）。
 		// ponytail: 全域放寬，只有上傳需要；若要收緊，改成只對 /sessions/:id/uploads 放寬。
-		BodyLimit: 10 * 1024 * 1024,
+		BodyLimit: math.MaxInt32,
 	})
 
 	// 沒帶 Cache-Control 時 Chromium 會依 Last-Modified 啟發式快取，改了前端檔案後 F5 仍吃舊的（桌面版又沒有強制重載）。
