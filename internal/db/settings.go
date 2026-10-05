@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"unicode/utf8"
 )
 
@@ -13,14 +14,17 @@ const (
 	maxAppearanceJSON = 64 * 1024
 	maxColorLen       = 128
 	maxCustomCSSLen   = 32 * 1024
+	maxBgImageURLLen  = 2048
 )
 
-// AppearanceDefaults 與前端 APPEARANCE_DEFAULTS 字串一致。
-var AppearanceDefaults = map[string]string{
-	"headingColor": "oklch(0.78 0.15 65)",
-	"boldColor":    "oklch(0.72 0.07 145)",
-	"codeColor":    "oklch(0.63 0.12 275)",
-	"customCss":    "",
+// AppearanceDefaults 與前端 APPEARANCE_DEFAULTS 一致。
+var AppearanceDefaults = map[string]any{
+	"headingColor":   "oklch(0.78 0.15 65)",
+	"boldColor":      "oklch(0.72 0.07 145)",
+	"codeColor":      "oklch(0.63 0.12 275)",
+	"customCss":      "",
+	"bgImageEnabled": false,
+	"bgImageUrl":     "",
 }
 
 var appearanceColorKeys = []string{"headingColor", "boldColor", "codeColor"}
@@ -73,6 +77,17 @@ func NormalizeAppearance(raw []byte) (map[string]any, error) {
 	if err := checkStringField(m, "customCss", maxCustomCSSLen); err != nil {
 		return nil, err
 	}
+	if v, ok := m["bgImageEnabled"]; ok {
+		if _, isBool := v.(bool); !isBool {
+			return nil, fmt.Errorf("bgImageEnabled 須為布林值")
+		}
+	}
+	if err := checkStringField(m, "bgImageUrl", maxBgImageURLLen); err != nil {
+		return nil, err
+	}
+	if s, _ := m["bgImageUrl"].(string); s != "" && !isHTTPURL(s) {
+		return nil, fmt.Errorf("背景圖片網址須為 http(s) 開頭")
+	}
 
 	for k, def := range AppearanceDefaults {
 		if _, ok := m[k]; !ok {
@@ -95,6 +110,12 @@ func checkStringField(m map[string]any, key string, maxLen int) error {
 		return fmt.Errorf("%s 長度不可超過 %d", key, maxLen)
 	}
 	return nil
+}
+
+// isHTTPURL 只接受 http(s) 絕對網址：背景圖網址會塞進 CSS url()，擋掉 javascript:、data: 等。
+func isHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // GetAppearance 讀取 appearance；無列時回預設且 Stored=false。

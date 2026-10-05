@@ -1,7 +1,7 @@
 // ── 設定彈窗（左選單 + 右內容，仿 Claude Desktop）───────────────────────────
 // 目前有「一般」「外觀」兩個分類：
 //   一般：伺服器端本機行為開關（目前僅 vscodeNoAdmin）。
-//   外觀：Markdown 顏色（heading/bold/inline code）+ 自訂 CSS。
+//   外觀：Markdown 顏色（heading/bold/inline code）+ 背景圖片 + 自訂 CSS。
 // 外觀本機 localStorage 當快取；伺服器 SQLite 為準（見 core.js putAppearance / hydrateAppearanceFromServer）。
 // 一般設定不做本機快取，見 GeneralSection。
 
@@ -233,6 +233,53 @@ function ChatFontSizeField() {
   );
 }
 
+/** 背景圖片：開關 + 圖床網址，跟其他外觀設定一樣按「儲存」才套用。 */
+function BgImageField({ draft, setDraft }) {
+  const url = draft.bgImageUrl || '';
+  const href = normalizeBgImageUrl(url);
+  const invalid = url.trim() !== '' && !href;
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => { setLoadFailed(false); }, [href]);
+
+  return (
+    <div>
+      <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">背景圖片</div>
+      <div className="text-[11px] text-[oklch(0.55_0.01_264)] mb-3">
+        貼上圖床的圖片網址（<code className="ra-mono">http(s)://</code>）。圖床須允許外部引用，否則會載不出來。
+        會自動加一層深色遮罩讓文字好讀，可用自訂 CSS 覆寫 <code className="ra-mono">--ra-bg-dim</code>（0–1）調整。
+      </div>
+      <label className="flex items-center gap-3 cursor-pointer mb-3">
+        <input
+          type="checkbox"
+          checked={!!draft.bgImageEnabled}
+          onChange={(e) => setDraft((prev) => ({ ...prev, bgImageEnabled: e.target.checked }))}
+          className="w-4 h-4 accent-violet-600 shrink-0"
+        />
+        <span className="text-sm text-[oklch(0.9_0.01_264)]">啟用背景圖片</span>
+      </label>
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setDraft((prev) => ({ ...prev, bgImageUrl: e.target.value }))}
+            placeholder="https://i.imgur.com/xxxxxxx.jpg"
+            spellCheck={false}
+            className="w-full bg-[oklch(0.16_0.02_264)] border border-[oklch(0.28_0.02_264)] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[oklch(0.9_0.01_264)] placeholder-[oklch(0.45_0.01_264)] focus:outline-none focus:border-violet-600"
+          />
+          {invalid && <div className="text-[11px] text-red-400 mt-1.5">網址須為 http:// 或 https:// 開頭的完整網址</div>}
+          {!invalid && loadFailed && <div className="text-[11px] text-amber-400 mt-1.5">圖片載入失敗：確認網址可公開存取、圖床允許外部引用</div>}
+        </div>
+        <div className="w-24 h-14 shrink-0 rounded-lg border border-[oklch(0.28_0.02_264)] bg-[oklch(0.16_0.02_264)] overflow-hidden flex items-center justify-center">
+          {href && !loadFailed
+            ? <img src={href} alt="背景預覽" className="w-full h-full object-cover" onError={() => setLoadFailed(true)} />
+            : <span className="text-[10px] text-[oklch(0.45_0.01_264)]">預覽</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppearanceSection({ draft, setDraft }) {
   const set = (key) => (val) => setDraft((prev) => ({ ...prev, [key]: val }));
   return (
@@ -250,6 +297,8 @@ function AppearanceSection({ draft, setDraft }) {
           <ColorField label="行內程式碼" value={draft.codeColor} onChange={set('codeColor')} placeholder={APPEARANCE_DEFAULTS.codeColor} />
         </div>
       </div>
+
+      <BgImageField draft={draft} setDraft={setDraft} />
 
       <div>
         <div className="text-sm font-semibold text-[oklch(0.92_0.01_264)] mb-1">自訂 CSS</div>
@@ -301,6 +350,11 @@ function SettingsModal({ open, onClose, onJumpToSession = null }) {
 
   const handleSave = async () => {
     setSaveError('');
+    if (String(draft.bgImageUrl || '').trim() && !normalizeBgImageUrl(draft.bgImageUrl)) {
+      setSection('appearance');
+      setSaveError('背景圖片網址格式不正確');
+      return;
+    }
     saveStoredAppearance(draft);
     applyAppearance(draft);
     setSaving(true);

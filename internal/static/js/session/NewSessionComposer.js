@@ -66,7 +66,7 @@ function NewSessionComposer({ prefill, onCreated, onCancel }) {
   };
 
   return (
-    <div className="h-full overflow-y-auto app-scroll flex flex-col items-center justify-center px-4 py-10 bg-[oklch(0.15_0.02_264)]">
+    <div className="ra-pane-fill h-full overflow-y-auto app-scroll flex flex-col items-center justify-center px-4 py-10 bg-[oklch(0.15_0.02_264)]">
       <div className="w-full max-w-xl space-y-4">
         <div className="flex items-center justify-between">
           <div className="ra-display text-lg text-[oklch(0.94_0.01_264)]">新建 Session</div>

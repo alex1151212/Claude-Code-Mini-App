@@ -250,6 +250,19 @@
     #ra-titlebar .ra-tb-close:active { background: #b22a1b; color: #fff; }
     #ra-titlebar.ra-tb-inactive .ra-tb-drag,
     #ra-titlebar.ra-tb-inactive .ra-tb-btn:not(:hover) { opacity: 0.5; }
+    /* 背景圖片（設定 → 外觀）：core.js applyBgImage 在 html 加 .ra-bg-image 並設 --ra-bg-image。
+       圖層固定在最底層並疊一層遮罩（--ra-bg-dim，自訂 CSS 可覆寫）；
+       整頁底色（.ra-pane-fill）改透明，側欄／聊天標題列／輸入列（.ra-pane）改半透明。 */
+    html { --ra-bg-dim: 0.55; }
+    html.ra-bg-image body.ra-body::before {
+      content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-image:
+        linear-gradient(oklch(0.13 0.02 264 / var(--ra-bg-dim)), oklch(0.13 0.02 264 / var(--ra-bg-dim))),
+        var(--ra-bg-image);
+      background-size: cover; background-position: center;
+    }
+    html.ra-bg-image .ra-pane-fill { background-color: transparent; }
+    html.ra-bg-image .ra-pane { background-color: oklch(0.13 0.02 264 / 0.6); }
   </style>
   <!-- 對話文字大小：每個裝置各自的偏好（localStorage），在 React 載入前先套，避免先閃一下預設大小。 -->
   <script>try{var f=parseInt(localStorage.getItem('cc_chat_fs_v1'),10);if(f>=12&&f<=22)document.documentElement.style.setProperty('--ra-chat-fs',f+'px')}catch(e){}</script>

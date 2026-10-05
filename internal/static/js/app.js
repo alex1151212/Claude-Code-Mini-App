@@ -245,10 +245,10 @@ function App() {
     }
 
     return (
-      <div className="h-app flex bg-[oklch(0.15_0.02_264)] min-w-0 relative">
+      <div className="ra-pane-fill h-app flex bg-[oklch(0.15_0.02_264)] min-w-0 relative">
         <aside
           style={{ width: sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidthPx, flexShrink: 0 }}
-          className="min-w-0 bg-[oklch(0.13_0.02_264)] border-r border-[oklch(0.26_0.02_264)] flex flex-col"
+          className="ra-pane min-w-0 bg-[oklch(0.13_0.02_264)] border-r border-[oklch(0.26_0.02_264)] flex flex-col"
         >
           <SessionView onEnter={selectSession} onSessionsLoaded={mergeSessionMetaFromList} onSortedSessionsChange={setSidebarSortedSessions} activeSessionId={session?.id} onCreateNew={openComposer} onOpenSettings={() => setSettingsOpen(true)} onToggleSidebar={toggleSidebarCollapsed} collapsed={sidebarCollapsed} />
         </aside>
@@ -276,7 +276,7 @@ function App() {
           ) : session ? (
             <ChatView session={session} onBack={() => selectSession(null)} showBack={false} fullHeight={false} onJumpToSession={selectSession} allSessions={sidebarSortedSessions} />
           ) : (
-            <div className="h-full flex flex-col items-center justify-center gap-3 bg-[oklch(0.15_0.02_264)]">
+            <div className="ra-pane-fill h-full flex flex-col items-center justify-center gap-3 bg-[oklch(0.15_0.02_264)]">
               <div className="w-10 h-10 rounded-[10px] bg-gradient-to-br from-[oklch(0.62_0.19_275)] to-[oklch(0.6_0.17_300)] flex items-center justify-center opacity-80" aria-hidden>
                 <div className="w-3.5 h-3.5 rounded-[3px] bg-white" />
               </div>

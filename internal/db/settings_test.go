@@ -110,6 +110,43 @@ func TestPutAppearance_RejectsNonStringColor(t *testing.T) {
 	}
 }
 
+func TestPutAppearance_BgImage(t *testing.T) {
+	database, err := Open(t.TempDir() + "/settings_bg.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	// 舊資料沒有背景圖欄位：補預設（關閉、空網址）。
+	got, err := database.PutAppearance([]byte(`{"customCss":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Data["bgImageEnabled"] != false || got.Data["bgImageUrl"] != "" {
+		t.Fatalf("預設背景圖欄位錯誤：%v / %v", got.Data["bgImageEnabled"], got.Data["bgImageUrl"])
+	}
+
+	got, err = database.PutAppearance([]byte(`{"bgImageEnabled":true,"bgImageUrl":"https://i.imgur.com/abc.png"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Data["bgImageEnabled"] != true || got.Data["bgImageUrl"] != "https://i.imgur.com/abc.png" {
+		t.Fatalf("背景圖欄位未保存：%v / %v", got.Data["bgImageEnabled"], got.Data["bgImageUrl"])
+	}
+
+	for _, body := range []string{
+		`{"bgImageEnabled":"true"}`,
+		`{"bgImageUrl":"javascript:alert(1)"}`,
+		`{"bgImageUrl":"data:image/png;base64,AAAA"}`,
+		`{"bgImageUrl":"/relative.png"}`,
+		`{"bgImageUrl":"https://` + strings.Repeat("a", maxBgImageURLLen) + `"}`,
+	} {
+		if _, err := database.PutAppearance([]byte(body)); err == nil {
+			t.Fatalf("應拒絕：%s", body)
+		}
+	}
+}
+
 func TestAppearanceResult_MarshalFlat(t *testing.T) {
 	res := AppearanceResult{
 		Stored: true,

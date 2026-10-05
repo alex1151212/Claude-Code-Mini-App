@@ -66,7 +66,7 @@ const SIDEBAR_WIDTH_MIN = 260;
 const SIDEBAR_RAIL_WIDTH = 56;
 
 /**
- * 外觀設定（Settings 彈窗）：Markdown 顏色 + 自訂 CSS。
+ * 外觀設定（Settings 彈窗）：Markdown 顏色 + 背景圖片 + 自訂 CSS。
  * localStorage（cc_appearance_v1）當快取；伺服器 SQLite 為準（GET/PUT /settings/appearance）。
  */
 const APPEARANCE_STORAGE_KEY = 'cc_appearance_v1';
@@ -75,7 +75,34 @@ const APPEARANCE_DEFAULTS = {
   boldColor: 'oklch(0.72 0.07 145)',
   codeColor: 'oklch(0.63 0.12 275)',
   customCss: '',
+  bgImageEnabled: false,
+  bgImageUrl: '',
 };
+
+/** 背景圖片網址：只收 http(s) 絕對網址（與後端 isHTTPURL 一致），回正規化後的 href；不合格回 ''。 */
+function normalizeBgImageUrl(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  try {
+    const u = new URL(s);
+    if ((u.protocol === 'http:' || u.protocol === 'https:') && u.host) return u.href;
+  } catch (_) {}
+  return '';
+}
+
+/** 套用背景圖：圖層與半透明面板的樣式在 index.html（html.ra-bg-image）。 */
+function applyBgImage(a) {
+  const root = document.documentElement;
+  const href = a.bgImageEnabled ? normalizeBgImageUrl(a.bgImageUrl) : '';
+  if (href) {
+    // URL.href 已把引號、空白等百分比編碼；反斜線在 CSS 字串裡是跳脫字元，另外編碼。
+    root.style.setProperty('--ra-bg-image', `url("${href.replace(/\\/g, '%5C')}")`);
+    root.classList.add('ra-bg-image');
+  } else {
+    root.style.removeProperty('--ra-bg-image');
+    root.classList.remove('ra-bg-image');
+  }
+}
 const APPEARANCE_CSS_VAR = {
   headingColor: '--md-heading-color',
   boldColor: '--md-bold-color',
@@ -148,6 +175,7 @@ function applyAppearance(appearance) {
   for (const key of Object.keys(APPEARANCE_CSS_VAR)) {
     root.setProperty(APPEARANCE_CSS_VAR[key], a[key] || APPEARANCE_DEFAULTS[key]);
   }
+  applyBgImage(a);
   const styleEl = document.getElementById('ra-custom-css');
   if (styleEl) styleEl.textContent = a.customCss || '';
 }
@@ -159,6 +187,8 @@ async function putAppearance(appearance) {
     boldColor: appearance.boldColor ?? APPEARANCE_DEFAULTS.boldColor,
     codeColor: appearance.codeColor ?? APPEARANCE_DEFAULTS.codeColor,
     customCss: appearance.customCss ?? '',
+    bgImageEnabled: !!appearance.bgImageEnabled,
+    bgImageUrl: String(appearance.bgImageUrl ?? '').trim(),
   };
   const res = await apiFetch('/settings/appearance', {
     method: 'PUT',

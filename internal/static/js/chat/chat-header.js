@@ -165,7 +165,7 @@ function ChatSessionHeader({
 
   return (
     <div
-      className="shrink-0 border-b border-[oklch(0.26_0.02_264)] bg-[oklch(0.15_0.02_264)]"
+      className="ra-pane shrink-0 border-b border-[oklch(0.26_0.02_264)] bg-[oklch(0.15_0.02_264)]"
       style={{ paddingTop: 'calc(0.5rem + env(safe-area-inset-top) + var(--tg-content-safe-top))' }}
     >
       {/* 手機：標題列 + badge 列（設計 2b） */}
