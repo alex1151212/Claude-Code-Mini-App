@@ -226,9 +226,35 @@
       to { opacity: 1; transform: translateY(0); }
     }
     .ra-card-enter { animation: ra-fade-in 0.35s ease-out both; }
+    /* 桌面殼（cmd/desktop）無邊框視窗：透明標題列佔最上方、App 往下讓位；
+       body 仍滿版，背景（含自訂 CSS 設在 body 的背景圖）會鋪到標題列底下。見 js/core/desktop-titlebar.js */
+    html.ra-desktop { --ra-titlebar-h: 32px; }
+    html.ra-desktop .h-app { height: calc(var(--tg-viewport-height, 100svh) - var(--ra-titlebar-h)); }
+    html.ra-desktop body.ra-body { height: 100svh; padding-top: var(--ra-titlebar-h); box-sizing: border-box; }
+    #ra-titlebar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 2147483000;
+      height: var(--ra-titlebar-h); display: flex; align-items: stretch;
+      background: transparent; user-select: none; -webkit-user-select: none;
+    }
+    #ra-titlebar .ra-tb-drag {
+      flex: 1; min-width: 0; display: flex; align-items: center; padding-left: 12px;
+      font-size: 12px; color: var(--ra-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #ra-titlebar .ra-tb-btn {
+      width: 46px; border: 0; padding: 0; background: transparent; color: var(--ra-text);
+      font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets'; font-size: 10px; cursor: default;
+    }
+    #ra-titlebar .ra-tb-btn:hover { background: oklch(1 0 0 / 8%); }
+    #ra-titlebar .ra-tb-btn:active { background: oklch(1 0 0 / 5%); }
+    #ra-titlebar .ra-tb-close:hover { background: #c42b1c; color: #fff; }
+    #ra-titlebar .ra-tb-close:active { background: #b22a1b; color: #fff; }
+    #ra-titlebar.ra-tb-inactive .ra-tb-drag,
+    #ra-titlebar.ra-tb-inactive .ra-tb-btn:not(:hover) { opacity: 0.5; }
   </style>
   <!-- 對話文字大小：每個裝置各自的偏好（localStorage），在 React 載入前先套，避免先閃一下預設大小。 -->
   <script>try{var f=parseInt(localStorage.getItem('cc_chat_fs_v1'),10);if(f>=12&&f<=22)document.documentElement.style.setProperty('--ra-chat-fs',f+'px')}catch(e){}</script>
+  <!-- 桌面殼標題列：只在 ?desktop=1 + WebView2 時啟用；一般 script，放 head 讓 class 在畫面出來前就套上。 -->
+  <script src="./js/core/desktop-titlebar.js"></script>
   <!-- Settings 彈窗的「自訂 CSS」寫入這裡；預設空白，不影響任何樣式。 -->
   <style id="ra-custom-css"></style>
 </head>

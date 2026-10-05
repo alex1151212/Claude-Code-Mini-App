@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -41,6 +42,9 @@ func main() {
 		Assets:      application.AlphaAssets,
 		Logger:      slog.Default(),
 		LogLevel:    slog.LevelInfo,
+		RawMessageHandler: func(w application.Window, msg string, origin *application.OriginInfo) {
+			handleTitleBarMessage(w, msg, origin, started.URL())
+		},
 		OnShutdown: func() {
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -65,10 +69,13 @@ func main() {
 		Height:           800,
 		MinWidth:         960,
 		MinHeight:        640,
-		URL:              started.URL() + "/",
+		URL:              started.URL() + "/?desktop=1",
 		BackgroundColour: application.NewRGBA(0x15, 0x16, 0x1e, 255),
 		// 預設在非 production 建置會開 devtools；這裡關掉，避免一般使用時出現。
 		DevToolsEnabled: false,
+		// 無邊框：原生標題列只能是純色，拿掉後由網頁自己畫透明標題列，背景圖才能鋪到最上緣。
+		// ?desktop=1 讓前端知道要顯示標題列（internal/static/js/core/desktop-titlebar.js）。
+		Frameless: true,
 		Windows: application.WindowsWindow{
 			DisableMenu: true,
 		},
@@ -107,6 +114,24 @@ func main() {
 		slog.Error(err.Error())
 		messageBox("Claude Code Mini App", err.Error())
 		os.Exit(1)
+	}
+}
+
+// handleTitleBarMessage 處理網頁標題列按鈕送來的訊息（chrome.webview.postMessage）。
+// 拖曳與邊緣縮放走 Wails 內建的 wails:drag / wails:resize:*，不經過這裡。
+// 只認本機頁面送來的訊息，頁面裡其他來源的 iframe 不能操作視窗。
+func handleTitleBarMessage(w application.Window, msg string, origin *application.OriginInfo, baseURL string) {
+	if origin == nil || !strings.HasPrefix(origin.Origin, baseURL+"/") {
+		return
+	}
+	switch msg {
+	case "ra:window:minimise":
+		w.Minimise()
+	case "ra:window:toggle-maximise":
+		w.ToggleMaximise()
+	case "ra:window:close":
+		// 觸發 WindowClosing，跟原生關閉一樣只是藏到系統匣。
+		w.Close()
 	}
 }
 
