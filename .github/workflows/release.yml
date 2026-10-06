@@ -55,7 +55,8 @@ jobs:
         run: |
           VER=${GITHUB_REF_NAME#v}
           # 取 CHANGELOG 中 "## [VER]" 到下一個 "## [" 之間的內容
-          awk -v v="$VER" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
-          test -s notes.md
+          awk -v v="$VER" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > changes.md
+          test -s changes.md
+          sed "s/@TAG@/$GITHUB_REF_NAME/g" .github/release-header.md | cat - changes.md > notes.md
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md \
             claude-miniapp-*.zip claude-miniapp-*.tar.gz checksums.txt
