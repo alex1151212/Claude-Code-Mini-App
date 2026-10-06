@@ -6,6 +6,10 @@
 
 [English](README.md)
 
+![Agent Console：左側依專案分組的 Claude、Codex、Kiro、Cursor 會話，右側為串流對話](docs/images/console.png)
+
+<sub>示範資料，取自臨時啟動的實例。</sub>
+
 代理程式仍然跑在你放程式碼的那台機器上，本專案是它們前面的控制台。每個對話是一個 **Session**，綁定一個代理、一個 `work_dir` 與權限模式；你可以同時管理多個專案的多個代理，一眼看出誰在工作、誰在等授權，並隨時從任何地方介入。
 
 | 入口 | 適用情境 | 驗證 |

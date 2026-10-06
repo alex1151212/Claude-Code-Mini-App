@@ -6,6 +6,10 @@
 
 [繁體中文](README.zh-TW.md)
 
+![Agent Console: sessions for Claude, Codex, Kiro and Cursor grouped by project, with a streaming chat on the right](docs/images/console.png)
+
+<sub>Demo data on a throwaway instance. The UI is shown in Traditional Chinese.</sub>
+
 Your agents keep running on the machine where your code lives; this app is the console in front of them. Each conversation is a **session** bound to a `work_dir`, an agent, and a permission mode, so you can juggle several agents across several projects, see which ones are working or waiting for approval, and step in from wherever you are.
 
 | Way in | For | Auth |
