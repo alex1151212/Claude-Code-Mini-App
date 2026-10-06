@@ -60,6 +60,9 @@ type PermissionDenial struct {
 	ToolName  string          `json:"tool_name"`
 	ToolUseID string          `json:"tool_use_id"`
 	ToolInput json.RawMessage `json:"tool_input"`
+	// BlockedByRule：該次呼叫被 settings 的 permissions.deny 規則擋下（stream 的 non_execution_kind=permission-rule）。
+	// 按「允許」重跑也不會通過，所以不該進等授權。只在記憶體流動，不寫入 pending_denials。
+	BlockedByRule bool `json:"blocked_by_rule,omitempty"`
 }
 
 // ToolCall 是 tool_started / tool_completed 事件的共用承載結構，
@@ -105,6 +108,13 @@ type Runner interface {
 }
 
 // ExtraArg 是 ExtraArgs map 的共用 key。
+// Claude 權限詢問 MCP 的固定名稱：mcp-config 的 server key 與工具名。--permission-prompt-tool 要寫成 mcp__<server>__<tool>。
+const (
+	PermPromptServer = "miniapp_perm"
+	PermPromptTool   = "claude_permission"
+	PermPromptFlag   = "mcp__" + PermPromptServer + "__" + PermPromptTool
+)
+
 const (
 	// 共用語意：授權/權限模式
 	// Claude 值：default / acceptEdits / bypassPermissions / plan
@@ -115,6 +125,9 @@ const (
 
 	// Claude 專屬
 	ArgAllowedTools = "allowed_tools" // 以逗號分隔
+	// ArgPermPromptConfig 為 --mcp-config 的 JSON 檔路徑；有值時 Claude runner 同時帶
+	// --permission-prompt-tool，讓命中 permissions.ask 的呼叫轉給 miniapp 詢問使用者。
+	ArgPermPromptConfig = "perm_prompt_config"
 
 	// Cursor Agent / Gemini 共用
 	ArgModel = "model" // --model <m>

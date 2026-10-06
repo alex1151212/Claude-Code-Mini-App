@@ -481,38 +481,43 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				OnStart:      func(pid int) { taskSetPid(sessionID, msgID, pid) },
 			}
 
-			// kiroacp 互動式授權：runner 中途收到工具授權請求時同步呼叫，
-			// 廣播 permission_request 給前端並阻塞，直到使用者 allow_once/deny_once 或 ctx 取消。
+			// askUser：中途授權共用流程（kiroacp 的 RequestPermission 與 Claude 的 --permission-prompt-tool 都走這裡）。
+			// 廣播 permission_request 給前端並阻塞，直到使用者 allow_once/deny_once 或 rctx 取消。
+			askUser := func(rctx context.Context, tools any) bool {
+				pe := &pendingPermEntry{ch: make(chan bool, 1), tools: tools}
+				permSet(sessionID, pe)
+
+				_ = database.UpdateSessionStatus(sessionID, db.SessionStatusAwaitingConfirm)
+				broadcast(serverMsg{Type: "status", Value: StateAwaitingConfirm})
+				broadcast(serverMsg{Type: "permission_request", Tools: tools})
+				notifyTaskAsync(botToken, tgUserID, notifyCfg, tg.TaskAlert{
+					SessionName: sess.Name,
+					Outcome:     tg.OutcomeConfirm,
+				})
+
+				var allow bool
+				select {
+				case allow = <-pe.ch:
+				case <-rctx.Done():
+					allow = false
+				}
+
+				permClear(sessionID, pe)
+				if rctx.Err() == nil {
+					_ = database.UpdateSessionStatus(sessionID, db.SessionStatusRunning)
+					broadcast(serverMsg{Type: "status", Value: StateStreaming})
+				}
+				return allow
+			}
+
+			// kiroacp 互動式授權：runner 中途收到工具授權請求時同步呼叫。
 			if agentType == agent.TypeKiroACP {
 				opts.RequestPermission = func(rctx context.Context, req agent.PermissionRequest) string {
 					title := strings.TrimSpace(req.Title)
 					if title == "" {
 						title = "工具授權請求"
 					}
-					tools := []map[string]string{{"tool_name": title}}
-					pe := &pendingPermEntry{ch: make(chan bool, 1), tools: tools}
-					permSet(sessionID, pe)
-
-					_ = database.UpdateSessionStatus(sessionID, db.SessionStatusAwaitingConfirm)
-					broadcast(serverMsg{Type: "status", Value: StateAwaitingConfirm})
-					broadcast(serverMsg{Type: "permission_request", Tools: tools})
-					notifyTaskAsync(botToken, tgUserID, notifyCfg, tg.TaskAlert{
-						SessionName: sess.Name,
-						Outcome:     tg.OutcomeConfirm,
-					})
-
-					var allow bool
-					select {
-					case allow = <-pe.ch:
-					case <-rctx.Done():
-						allow = false
-					}
-
-					permClear(sessionID, pe)
-					if rctx.Err() == nil {
-						_ = database.UpdateSessionStatus(sessionID, db.SessionStatusRunning)
-						broadcast(serverMsg{Type: "status", Value: StateStreaming})
-					}
+					allow := askUser(rctx, []map[string]string{{"tool_name": title}})
 
 					// 依 kind 把粗粒度 allow/deny 對應成該請求的 optionId（robust，不寫死 id）。
 					wantKinds := []string{"reject_once", "reject_always"}
@@ -557,7 +562,25 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 			}
 			slog.Info(fmt.Sprintf("[ws] start %s.Run agentSessionID=%q mode=%s msgID=%d", runner.Name(), opts.SessionID, pm, msgID))
 
+			// Claude + bypassPermissions：命中 settings 的 permissions.ask 時，claude 經 --permission-prompt-tool
+			// 問 miniapp（/mcp/perm），由 askUser 走既有授權面板。mcp_token 未設定時不啟用，行為與過去相同。
+			var permAsker *claudeAsker
+			permCleanup := func() {}
+			if isClaude && pm == "bypassPermissions" {
+				if _, _, ok := claudePermMCP(); ok {
+					if cfgPath, rmCfg, err := writePermMCPConfig(sessionID); err != nil {
+						slog.Info(fmt.Sprintf("[ws] perm mcp 設定檔建立失敗，略過權限詢問: %v", err))
+					} else {
+						a, unreg := registerClaudeAsker(sessionID, ctx, askUser)
+						permAsker = a
+						extra[agent.ArgPermPromptConfig] = cfgPath
+						permCleanup = func() { unreg(); rmCfg() }
+					}
+				}
+			}
+
 			go func(opts agent.RunOptions, msgID int64, userPrompt string) {
+				defer permCleanup()
 				defer taskEnd(sessionID, msgID)
 
 				permDenied := false
@@ -565,6 +588,23 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 				succeeded := false
 				errText := ""
 				var cancelled bool
+
+				// appendNotice：把說明寫進本則回覆（落 DB＋即時廣播）。尚未開始串流時先補 streaming 狀態，
+				// 前端的 delta 只會接在最後一則訊息上。
+				streamed := false
+				appendNotice := func(text string) {
+					if text == "" {
+						return
+					}
+					if !streamed {
+						streamed = true
+						broadcast(serverMsg{Type: "status", Value: StateStreaming})
+					}
+					if err := database.AppendMessageContent(msgID, text); err != nil {
+						slog.Info(fmt.Sprintf("[ws] AppendMessageContent (notice): %v", err))
+					}
+					broadcast(serverMsg{Type: "delta", Content: text})
+				}
 
 				// 收尾決定佇列走向。等授權時不動佇列；成功才續跑；失敗／中斷暫停，避免錯誤連鎖。
 				// 成功時先 taskEnd 解除登記，drainIfIdle 才會看到閒置（外層 defer taskEnd 之後自然 no-op）。
@@ -598,6 +638,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 					}
 					switch e.Type {
 					case agent.EventStreamStart:
+						streamed = true
 						broadcast(serverMsg{Type: "status", Value: StateStreaming})
 
 					case agent.EventThinking:
@@ -642,8 +683,18 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 						if !isClaude {
 							return
 						}
+						// 已由使用者在授權面板回答過的（prompt-tool 回 deny 後 result 仍會列出），不再重複詢問。
+						denials := permAsker.dropAnswered(e.Denials)
+						// 被 deny 規則擋下、或「允許」後重跑仍被拒的，按允許也不會過：改成說明原因，不進等授權。
+						pending, blocked := splitDenials(denials)
+						pending, still := splitStillDenied(allowedOnce, pending)
+						appendNotice(blockedNotice(blocked))
+						appendNotice(stillDeniedNotice(still))
+						if len(pending) == 0 {
+							return
+						}
 						permDenied = true
-						if raw, err := json.Marshal(e.Denials); err == nil {
+						if raw, err := json.Marshal(pending); err == nil {
 							if err := database.UpdatePendingDenials(sessionID, string(raw)); err != nil {
 								slog.Info(fmt.Sprintf("[ws] UpdatePendingDenials: %v", err))
 							}
@@ -652,7 +703,7 @@ func NewHandler(database *db.DB, botToken string, shellCfg ShellOpts, quotaSvc *
 							slog.Info(fmt.Sprintf("[ws] UpdateSessionStatus awaiting_confirm: %v", err))
 						}
 						broadcast(serverMsg{Type: "status", Value: StateAwaitingConfirm})
-						broadcast(serverMsg{Type: "permission_request", Tools: e.Denials})
+						broadcast(serverMsg{Type: "permission_request", Tools: pending})
 						notifyTaskAsync(botToken, tgUserID, notifyCfg, tg.TaskAlert{
 							SessionName: sess.Name,
 							Outcome:     tg.OutcomeConfirm,

@@ -366,6 +366,9 @@ func Start(ctx context.Context) (*Server, error) {
 	if cfg.McpToken != "" {
 		mcpHandler := mymcp.NewHTTPHandler(database, quotaSvc, cfg.Server.Port, cfg.McpToken, cfg.McpMaxHops)
 		app.Post("/mcp", authMiddleware, adaptor.HTTPHandler(mcpHandler))
+		// Claude 的 --permission-prompt-tool 專用端點（只有一個工具）。沿用 mcp_token 的 Bearer 認證，不另開 token。
+		ws.SetClaudePermMCP(fmt.Sprintf("http://127.0.0.1:%d/mcp/perm", cfg.Server.Port), cfg.McpToken)
+		app.Post("/mcp/perm", authMiddleware, adaptor.HTTPHandler(mymcp.NewPermHTTPHandler(ws.AskClaudePermission)))
 	} else {
 		slog.Info("[mcp] mcp_token 未設定，/mcp 停用")
 	}

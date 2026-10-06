@@ -18,6 +18,17 @@ type StreamEvent struct {
 	Model             string             `json:"model,omitempty"`
 	StopReason        string             `json:"stop_reason,omitempty"`
 	PermissionDenials []PermissionDenial `json:"permission_denials,omitempty"`
+	// type=user：被拒／未執行的 tool_result 旁會帶 tool_result_meta（claude 2.1.x 觀察到的欄位，官方文件未保證；缺漏時視為沒有訊號）。
+	ToolResultMeta []ToolResultMeta `json:"tool_result_meta,omitempty"`
+}
+
+// NonExecPermissionRule：該工具呼叫被 settings 的 permissions.deny 規則擋下。
+const NonExecPermissionRule = "permission-rule"
+
+// ToolResultMeta 說明某個 tool_use 為何沒有執行（non_execution_kind）。
+type ToolResultMeta struct {
+	ID               string `json:"id"`
+	NonExecutionKind string `json:"non_execution_kind,omitempty"`
 }
 
 // AssistantMessage 是 type=assistant 事件的 message 欄位

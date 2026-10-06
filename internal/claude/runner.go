@@ -70,8 +70,32 @@ func buildClaudeArgs(opts agent.RunOptions) []string {
 		if effort := strings.TrimSpace(opts.ExtraArgs[agent.ArgEffort]); effort != "" {
 			args = append(args, "--effort", effort)
 		}
+		// 權限詢問 MCP：設定檔路徑（內含 token 的 header 不出現在 argv／log）。
+		if p := strings.TrimSpace(opts.ExtraArgs[agent.ArgPermPromptConfig]); p != "" {
+			args = append(args, "--mcp-config", p, "--permission-prompt-tool", agent.PermPromptFlag)
+		}
 	}
 	return args
+}
+
+// permPromptToolTimeoutMs：權限詢問等使用者回答的上限（30 分鐘）。
+// 實測 claude 的 MCP 工具呼叫（HTTP）預設約 60 秒就放棄，使用者還沒看到通知詢問就失敗；
+// 設 MCP_TOOL_TIMEOUT 後 90 秒才回答仍可執行。
+const permPromptToolTimeoutMs = "1800000"
+
+// claudeEnv 組出 claude 子進程的環境變數。
+func claudeEnv(base []string, permPrompt bool) []string {
+	// -p 結束後背景 Bash 約 5 秒會被殺；禁止背景任務，改前景跑完再回 result。
+	env := append(base[:len(base):len(base)], "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1")
+	if permPrompt {
+		for _, kv := range base {
+			if strings.HasPrefix(kv, "MCP_TOOL_TIMEOUT=") {
+				return env // 使用者自己設定過就尊重
+			}
+		}
+		env = append(env, "MCP_TOOL_TIMEOUT="+permPromptToolTimeoutMs)
+	}
+	return env
 }
 
 // Run 實作 agent.Runner：啟動 claude -p 子進程，逐行解析 stream-json 並透過 cb 回傳事件。
@@ -89,7 +113,7 @@ func (r *Runner) Run(ctx context.Context, opts agent.RunOptions, cb agent.EventC
 		cmd.Dir = opts.WorkDir
 	}
 	// -p 結束後背景 Bash 約 5 秒會被殺；禁止背景任務，改前景跑完再回 result。
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1")
+	cmd.Env = claudeEnv(os.Environ(), opts.ExtraArgs[agent.ArgPermPromptConfig] != "")
 	cmd.SysProcAttr = proc.SysProcAttr()
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Cancel = func() error {
@@ -185,6 +209,8 @@ type streamState struct {
 	emittedAnyText bool
 	// thinkingBuf 累積 thinking_delta，每次送出 EventThinking 時語意為「當前完整思考快照」（與 Gemini runner 一致）
 	thinkingBuf strings.Builder
+	// blockedByRule 記錄被 permissions.deny 規則擋下的 tool_use_id（來自 user 事件的 tool_result_meta），result 時對應回 denial。
+	blockedByRule map[string]bool
 }
 
 func (st *streamState) emitDelta(cb agent.EventCallback, text string) {
@@ -216,6 +242,14 @@ func (r *Runner) dispatch(e *StreamEvent, cb agent.EventCallback, st *streamStat
 	case "user":
 		// tool_result 等以 user 事件回來；下一則 assistant 是新一輪，不可沿用上一輪的 gotStreamTextDelta。
 		st.gotStreamTextDelta = false
+		for _, m := range e.ToolResultMeta {
+			if m.NonExecutionKind == NonExecPermissionRule && m.ID != "" {
+				if st.blockedByRule == nil {
+					st.blockedByRule = map[string]bool{}
+				}
+				st.blockedByRule[m.ID] = true
+			}
+		}
 		// tool_result 裡若帶圖片（如 MCP 截圖工具），落地存檔後以 markdown image 語法併入既有 delta
 		// 管線，前端 marked.js 會直接渲染成 <img>，不需另開事件型別或 WS 訊息格式。
 		for _, img := range e.Images() {
@@ -286,9 +320,10 @@ func (r *Runner) dispatch(e *StreamEvent, cb agent.EventCallback, st *streamStat
 			denials := make([]agent.PermissionDenial, 0, len(e.PermissionDenials))
 			for _, d := range e.PermissionDenials {
 				denials = append(denials, agent.PermissionDenial{
-					ToolName:  d.ToolName,
-					ToolUseID: d.ToolUseID,
-					ToolInput: d.ToolInput,
+					ToolName:      d.ToolName,
+					ToolUseID:     d.ToolUseID,
+					ToolInput:     d.ToolInput,
+					BlockedByRule: st.blockedByRule[d.ToolUseID],
 				})
 			}
 			cb(agent.Event{Type: agent.EventPermDenied, Denials: denials, SessionID: e.SessionID})
