@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows runner：桌面版（Wails）只能在 Windows 編；server 純 Go，順便交叉編 Linux
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: tag 必須等於 VERSION
+        run: test "${GITHUB_REF_NAME}" = "v$(cat VERSION)"
+
+      - name: 測試
+        run: go test ./internal/...
+
+      - name: 打包
+        run: |
+          V=${GITHUB_REF_NAME}
+          # 前端由磁碟讀取（./internal/static），不能只發 binary
+          stage() { # $1=目錄
+            mkdir -p "$1/internal"
+            cp -r internal/static "$1/internal/static"
+            cp config.example.yaml README.md README.zh-TW.md LICENSE CHANGELOG.md "$1/"
+          }
+
+          W=claude-miniapp-$V-windows-amd64
+          stage $W
+          go build -o $W/claude-miniapp.exe ./cmd/server
+          go build -tags production -ldflags "-H windowsgui" -o $W/claude-miniapp-desktop.exe ./cmd/desktop
+          7z a -tzip $W.zip $W
+
+          L=claude-miniapp-$V-linux-amd64
+          stage $L
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $L/claude-miniapp ./cmd/server
+          tar -czf $L.tar.gz $L
+
+          sha256sum $W.zip $L.tar.gz > checksums.txt
+
+      - name: 發佈 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=${GITHUB_REF_NAME#v}
+          # 取 CHANGELOG 中 "## [VER]" 到下一個 "## [" 之間的內容
+          awk -v v="$VER" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
+          test -s notes.md
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md \
+            claude-miniapp-*.zip claude-miniapp-*.tar.gz checksums.txt

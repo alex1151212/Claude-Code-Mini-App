@@ -2,7 +2,7 @@
 
 > 用手機 Telegram 遠端操控伺服器上的 AI 編碼 CLI。**單一 Go 二進位**同時提供 REST、WebSocket 與 UI，無需獨立前端建置。
 
-[![Version](https://img.shields.io/badge/version-0.6.0-blue)](#) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](#)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue)](#) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](#)
 
 [English](README.md)
 
